@@ -6,7 +6,17 @@ import {
   RoomSettings,
   SplitMode,
 } from '../types';
-import { DEFAULT_ROOM_ID, supabase } from './supabase';
+import { DEFAULT_ROOM_ID, supabase, supabaseConfig } from './supabase';
+
+function friendlyError(err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/failed to fetch|load failed|networkerror|fetch failed/i.test(raw)) {
+    return new Error(
+      `Network blocked talking to ${supabaseConfig.url}. Open the app in Chrome/Safari (not an embedded preview), allow the Supabase domain, then Retry. Also confirm Vercel has VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY and was redeployed.`
+    );
+  }
+  return err instanceof Error ? err : new Error(raw);
+}
 
 type DbRoom = {
   id: string;
@@ -154,19 +164,28 @@ function mapKitty(row: DbKittyDeposit): KittyDeposit {
 export async function loadRoomSnapshot(): Promise<RoomSnapshot> {
   let room: DbRoom | null = null;
 
-  const byId = await supabase.from('rooms').select('*').eq('id', DEFAULT_ROOM_ID).maybeSingle();
-  throwIfError(byId.error);
-  room = byId.data as DbRoom | null;
+  try {
+    const byId = await supabase.from('rooms').select('*').eq('id', DEFAULT_ROOM_ID).maybeSingle();
+    throwIfError(byId.error);
+    room = byId.data as DbRoom | null;
 
-  if (!room) {
-    const first = await supabase.from('rooms').select('*').order('created_at').limit(1).maybeSingle();
-    throwIfError(first.error);
-    room = first.data as DbRoom | null;
+    if (!room) {
+      const first = await supabase
+        .from('rooms')
+        .select('*')
+        .order('created_at')
+        .limit(1)
+        .maybeSingle();
+      throwIfError(first.error);
+      room = first.data as DbRoom | null;
+    }
+  } catch (err) {
+    throw friendlyError(err);
   }
 
   if (!room) {
     throw new Error(
-      'No room found in Supabase. Run the schema SQL (including the seed insert) first.'
+      'No room found in Supabase. Run supabase/schema.sql (including the seed insert) first.'
     );
   }
 

@@ -1,0 +1,394 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Hostel Room Expense Tracker</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: dark ink masthead with the proposal thesis, then a light working ledger: steps, a live demo app in tabs, rules, next steps. */
+:root{
+  --bg:#EEF2F1; --surface:#FFFFFF; --ink:#0E1B1D; --muted:#56696B; --line:#D3DDDB;
+  --band:#0E1B1D; --band-fg:#EAF3F1; --band-muted:#8FA8A5;
+  --accent:#0B7A6E; --accent-soft:#D7EEEA; --accent-fg:#FFFFFF;
+  --pos:#1B7F4B; --pos-soft:#DCF1E4; --neg:#B4372D; --neg-soft:#F7E0DC; --warn:#8A5A00; --warn-soft:#F8EBCB;
+  --f-display:"Bricolage Grotesque","Helvetica Neue",Arial,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0A1213; --surface:#111D1F; --ink:#E6F0EE; --muted:#92A9A6; --line:#23393B;
+  --band:#050A0B; --band-fg:#EAF3F1; --band-muted:#7E9895;
+  --accent:#3FC5B3; --accent-soft:#123A36; --accent-fg:#04201C;
+  --pos:#5FD694; --pos-soft:#123826; --neg:#FF8A7D; --neg-soft:#40201C; --warn:#F0C25A; --warn-soft:#3A2D0C; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0A1213; --surface:#111D1F; --ink:#E6F0EE; --muted:#92A9A6; --line:#23393B;
+  --band:#050A0B; --band-fg:#EAF3F1; --band-muted:#7E9895;
+  --accent:#3FC5B3; --accent-soft:#123A36; --accent-fg:#04201C;
+  --pos:#5FD694; --pos-soft:#123826; --neg:#FF8A7D; --neg-soft:#40201C; --warn:#F0C25A; --warn-soft:#3A2D0C; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55;margin:0;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0}
+.wrap{max-width:1040px;margin:0 auto}
+h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+p{margin:0}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+/* Masthead */
+.band{background:var(--band);color:var(--band-fg);margin-left:calc(-1*max(16px,env(safe-area-inset-left,0px)));margin-right:calc(-1*max(16px,env(safe-area-inset-right,0px)));
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:40px 36px}
+.band .eyebrow{color:var(--band-muted)}
+.band h1{font-size:clamp(34px,7vw,68px);line-height:1.02;font-weight:800;margin-top:14px;max-width:16ch}
+.lede{margin-top:18px;max-width:58ch;color:var(--band-muted);font-size:17px}
+.lede b{color:var(--band-fg);font-weight:500}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:#23393B;margin-top:32px;border:1px solid #23393B}
+.fact{background:var(--band);padding:14px 16px;min-width:0}
+.fact .n{font-family:var(--f-mono);font-size:26px;font-weight:500;color:var(--accent)}
+.fact .l{font-size:13px;color:var(--band-muted)}
+.theme-btn{float:right;background:transparent;color:var(--band-muted);border:1px solid #23393B;border-radius:6px;padding:5px 10px;font:12px var(--f-mono);cursor:pointer}
+.theme-btn:hover{color:var(--band-fg)}
+
+section{padding-block:44px 8px}
+.sec-head{display:flex;flex-direction:column;gap:6px;margin-bottom:22px}
+.sec-head h2{font-size:clamp(24px,4vw,34px);font-weight:700}
+.sec-head p{color:var(--muted);max-width:62ch}
+
+/* Steps: a real sequence */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;counter-reset:s;padding:0;margin:0;list-style:none}
+.steps li{counter-increment:s;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px;min-width:0}
+.steps li::before{content:"Step " counter(s);font-family:var(--f-mono);font-size:12px;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:8px}
+.steps b{font-family:var(--f-display);font-size:17px;display:block;margin-bottom:4px}
+.steps span{color:var(--muted);font-size:14px}
+
+/* App */
+.app{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);background:var(--bg)}
+.tab{appearance:none;background:none;border:0;border-bottom:3px solid transparent;padding:13px 18px;font:500 14px var(--f-body);color:var(--muted);cursor:pointer;white-space:nowrap}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);background:var(--surface)}
+.panel{padding:20px}
+.panel[hidden]{display:none}
+.notice{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:18px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.field label,.lab{font-size:12px;font-family:var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+input[type=text],input[type=date],input[type=number],select{font:15px var(--f-body);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 10px;min-width:0;width:100%}
+input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.checks{display:flex;gap:8px;flex-wrap:wrap}
+.chk{display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 9px;font-size:14px;cursor:pointer}
+.chk input{accent-color:var(--accent);margin:0}
+.btn{appearance:none;font:600 14px var(--f-body);background:var(--accent);color:var(--accent-fg);border:0;border-radius:6px;padding:10px 16px;cursor:pointer}
+.btn:hover{filter:brightness(1.08)}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.sm{padding:5px 10px;font-size:13px}
+.tbl-wrap{overflow-x:auto;margin-top:18px;border:1px solid var(--line);border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{font:500 11px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;background:var(--bg);white-space:nowrap}
+td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:middle}
+td.num,th.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.calc{background:var(--bg)}
+.pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-family:var(--f-mono)}
+.pill.cat{background:var(--accent-soft);color:var(--accent)}
+.pill.sample{background:var(--warn-soft);color:var(--warn)}
+.pos{color:var(--pos)}.neg{color:var(--neg)}
+.pill.pos{background:var(--pos-soft)}.pill.neg{background:var(--neg-soft)}
+.empty{padding:28px;text-align:center;color:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:6px}
+.card{background:var(--bg);border-radius:8px;padding:14px;min-width:0}
+.card .big{font:500 24px var(--f-mono);margin-top:4px}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;min-width:70px}
+.bar i{display:block;height:100%;background:var(--accent)}
+.split-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-top:20px}
+.xfer{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:11px 0;border-top:1px solid var(--line)}
+.xfer:first-of-type{border-top:0}
+.sub{font-family:var(--f-display);font-size:19px;font-weight:700;margin-bottom:4px}
+.hint{color:var(--muted);font-size:13px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;background:var(--accent)}
+
+/* Rules + next */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px;min-width:0}
+.box h3{font-size:19px;margin-bottom:12px}
+.box ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:8px}
+.box li::marker{color:var(--accent)}
+.next{margin-top:16px;background:var(--accent-soft);border-radius:10px;padding:20px;display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center}
+.next h3{font-size:20px}
+.next p{color:var(--muted);max-width:56ch}
+footer{padding-block:36px 48px;color:var(--muted);font-size:13px;font-family:var(--f-mono)}
+@media (prefers-reduced-motion:no-preference){.tab,.btn{transition:background .15s,color .15s,filter .15s}}
+</style>
+
+<body>
+<header class="band">
+  <div class="wrap">
+    <button class="theme-btn" id="themeBtn" type="button" aria-label="Switch light or dark theme">Theme</button>
+    <div class="eyebrow">Project proposal · Shared living</div>
+    <h1>Hostel Room Expense Tracker</h1>
+    <p class="lede">One shared ledger for a five-person room. <b>Log a purchase in ten seconds,</b> see who owes whom at any moment, and settle the month with the fewest possible transfers.</p>
+    <div class="facts">
+      <div class="fact"><div class="n">5</div><div class="l">Roommates on one ledger</div></div>
+      <div class="fact"><div class="n">6</div><div class="l">Linked tabs, all calculated</div></div>
+      <div class="fact"><div class="n">2</div><div class="l">Settlement options</div></div>
+      <div class="fact"><div class="n">¥0</div><div class="l">Every balance after settling</div></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">How it works</div>
+      <h2>From a shared dinner to a zero balance</h2>
+      <p>Anyone who pays for something shared adds one row. The sheet does the splitting, the running balances and the month-end settlement.</p>
+    </div>
+    <ol class="steps">
+      <li><b>Log the expense</b><span>Date, what it was, category, amount, who paid, and who shares it.</span></li>
+      <li><b>Untick who was absent</b><span>All five are ticked by default. A dinner for three splits three ways.</span></li>
+      <li><b>Log repayments</b><span>When cash moves between roommates, record who gave and who received.</span></li>
+      <li><b>Read the balances</b><span>Per month: paid versus share, plus the running outstanding balance.</span></li>
+      <li><b>Settle the month</b><span>Pick one coordinator, or exact person-to-person amounts. Log each transfer.</span></li>
+    </ol>
+  </section>
+
+  <section id="demo">
+    <div class="sec-head">
+      <div class="eyebrow">Working demo</div>
+      <h2>Try the tracker</h2>
+      <p>This is the same logic as the spreadsheet, as an app. Add an expense, untick someone, and watch the balances and settlement change.</p>
+    </div>
+
+    <div class="app">
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div id="panels"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Ground rules</div>
+      <h2>Five habits keep the numbers honest</h2>
+    </div>
+    <div class="two">
+      <div class="box">
+        <h3>Room rules</h3>
+        <ul>
+          <li>Log it the same day. The system only works if every shared purchase goes in.</li>
+          <li>Only shared purchases go in. Personal items do not.</li>
+          <li>Whoever pays, logs it. If someone asked you to bring something, log it when you get back.</li>
+          <li>Do not type in the grey columns (Split Between, Each Pays, Month) or in Balances, Settlement and Monthly Report. They calculate themselves.</li>
+          <li>A positive balance means the group owes you. A negative balance means you owe the group.</li>
+        </ul>
+      </div>
+      <div class="box">
+        <h3>Before you start</h3>
+        <ul>
+          <li>Delete the sample rows in Expenses and Payments. They only show how the numbers flow.</li>
+          <li>Share the sheet with all five roommates as Editors, so anyone can log an expense from a phone.</li>
+          <li>To rename a roommate or change categories, edit the Settings tab. Every other tab updates.</li>
+          <li>Amounts show in yuan (¥). To change currency, use Format, Number, Custom currency on the amount columns.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="next">
+      <div>
+        <h3>Want to see it with your own numbers?</h3>
+        <p>The full spreadsheet is shared as a Google Sheet. Open it to inspect every formula behind this app.</p>
+      </div>
+      <a class="btn" href="https://docs.google.com/spreadsheets/d/1v_TEqwUInN4VUoAfnx37h14WCr3KjNTnVgFnnBD_WNM/edit?usp=sharing" target="_blank" rel="noopener">Open the spreadsheet</a>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">Hostel Room Expense Tracker · Roommates: Umair, Ali, Aleem, Faiz, Yousaf · Amounts in ¥</footer>
+
+<script>
+(function(){
+  var people=[{id:'u',name:'Umair'},{id:'a',name:'Ali'},{id:'l',name:'Aleem'},{id:'f',name:'Faiz'},{id:'y',name:'Yousaf'}];
+  var cats=['Food','Utilities','Supplies','Other'];
+  var nid=100;
+  var expenses=[
+    {id:1,date:'2026-10-03',what:'Group dinner',cat:'Food',amount:150,paidBy:'u',split:['u','a','l'],sample:true},
+    {id:2,date:'2026-10-08',what:'Drinking water bottles',cat:'Utilities',amount:60,paidBy:'a',split:['u','a','l','f','y'],sample:true},
+    {id:3,date:'2026-10-15',what:'Tissues and cleaning supplies',cat:'Supplies',amount:45,paidBy:'f',split:['u','a','l','f','y'],sample:true}
+  ];
+  var payments=[{id:1,date:'2026-10-20',from:'l',to:'u',amount:30,sample:true}];
+  var state={tab:'expenses',month:'all',coord:'u'};
+  var TABS=[['expenses','Expenses'],['payments','Payments'],['balances','Balances'],['settlement','Settlement'],['report','Monthly Report'],['settings','Settings']];
+
+  function $(s,r){return (r||document).querySelector(s)}
+  function esc(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML}
+  function name(id){for(var i=0;i<people.length;i++)if(people[i].id===id)return people[i].name;return id}
+  function yuan(n){return '¥'+Math.abs(n).toFixed(2)}
+  function signed(n){if(Math.abs(n)<0.005)return '¥0.00';return (n>0?'+':'−')+yuan(n)}
+  function cls(n){return Math.abs(n)<0.005?'':(n>0?'pos':'neg')}
+  function monthOf(d){return d.slice(0,7)}
+  function monthLabel(m){if(m==='all')return 'All months';var p=m.split('-');return new Date(+p[0],+p[1]-1,1).toLocaleString('en-US',{month:'long',year:'numeric'})}
+  function months(){var s={};expenses.forEach(function(e){s[monthOf(e.date)]=1});payments.forEach(function(p){s[monthOf(p.date)]=1});return Object.keys(s).sort()}
+  function today(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
+
+  function stats(month){
+    var paid={},share={};people.forEach(function(p){paid[p.id]=0;share[p.id]=0});
+    expenses.forEach(function(e){
+      if(month!=='all'&&monthOf(e.date)!==month)return;
+      if(!e.split.length)return;
+      paid[e.paidBy]+=e.amount;
+      e.split.forEach(function(id){share[id]+=e.amount/e.split.length});
+    });
+    return {paid:paid,share:share};
+  }
+  function outstanding(){
+    var s=stats('all'),b={};
+    people.forEach(function(p){b[p.id]=s.paid[p.id]-s.share[p.id]});
+    payments.forEach(function(p){b[p.from]+=p.amount;b[p.to]-=p.amount});
+    return b;
+  }
+  function selectHtml(id,opts,val){return '<select id="'+id+'">'+opts.map(function(o){return '<option value="'+esc(o[0])+'"'+(o[0]===val?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'}
+  function personSelect(id,val){return selectHtml(id,people.map(function(p){return [p.id,p.name]}),val)}
+  function monthSelect(id){return selectHtml(id,[['all','All months']].concat(months().map(function(m){return [m,monthLabel(m)]})),state.month)}
+  function sampleNotice(){
+    var n=expenses.filter(function(e){return e.sample}).length+payments.filter(function(p){return p.sample}).length;
+    if(!n)return '';
+    return '<div class="notice"><span>Showing '+n+' sample rows so you can see how the numbers flow.</span><button class="btn ghost sm" data-act="clear-samples" type="button">Delete sample rows</button></div>';
+  }
+
+  var views={
+    expenses:function(){
+      var f='<form id="expForm"><div class="form-grid">'+
+        '<div class="field"><label for="eDate">Date</label><input type="date" id="eDate" value="'+today()+'" required></div>'+
+        '<div class="field"><label for="eWhat">What was it</label><input type="text" id="eWhat" placeholder="Dinner, water, tissues" required></div>'+
+        '<div class="field"><label for="eCat">Category</label>'+selectHtml('eCat',cats.map(function(c){return [c,c]}),cats[0])+'</div>'+
+        '<div class="field"><label for="eAmt">Amount (¥)</label><input type="number" id="eAmt" min="0.01" step="0.01" placeholder="0.00" required></div>'+
+        '<div class="field"><label for="ePaid">Who paid</label>'+personSelect('ePaid',people[0].id)+'</div></div>'+
+        '<div style="margin-top:14px"><div class="lab" style="margin-bottom:6px">Shared by (all ticked by default)</div><div class="checks">'+
+        people.map(function(p){return '<label class="chk"><input type="checkbox" name="eSplit" value="'+p.id+'" checked>'+esc(p.name)+'</label>'}).join('')+'</div></div>'+
+        '<div class="row" style="margin-top:16px"><button class="btn" type="submit">Add expense</button><span class="hint" id="eMsg" aria-live="polite"></span></div></form>';
+      var rows=expenses.slice().sort(function(a,b){return a.date<b.date?1:-1}).map(function(e){
+        return '<tr><td class="mono">'+esc(e.date)+'</td><td>'+esc(e.what)+(e.sample?' <span class="pill sample">Sample</span>':'')+'</td>'+
+        '<td><span class="pill cat">'+esc(e.cat)+'</span></td><td class="num">'+yuan(e.amount)+'</td><td>'+esc(name(e.paidBy))+'</td>'+
+        '<td class="calc">'+esc(e.split.map(name).join(', '))+'</td><td class="num calc">'+(e.split.length?yuan(e.amount/e.split.length):'–')+'</td>'+
+        '<td class="calc mono">'+monthOf(e.date)+'</td><td><button class="btn ghost sm" data-act="del-exp" data-id="'+e.id+'" type="button" aria-label="Delete '+esc(e.what)+'">Delete</button></td></tr>'}).join('');
+      var tbl=expenses.length?'<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>What</th><th>Category</th><th class="num">Amount</th><th>Paid by</th><th>Split between</th><th class="num">Each pays</th><th>Month</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="tbl-wrap"><div class="empty">No expenses yet. Add the first shared purchase above.</div></div>';
+      return sampleNotice()+f+tbl;
+    },
+    payments:function(){
+      var f='<form id="payForm"><div class="form-grid">'+
+        '<div class="field"><label for="pDate">Date</label><input type="date" id="pDate" value="'+today()+'" required></div>'+
+        '<div class="field"><label for="pFrom">Who gave</label>'+personSelect('pFrom',people[1].id)+'</div>'+
+        '<div class="field"><label for="pTo">Who received</label>'+personSelect('pTo',people[0].id)+'</div>'+
+        '<div class="field"><label for="pAmt">Amount (¥)</label><input type="number" id="pAmt" min="0.01" step="0.01" placeholder="0.00" required></div></div>'+
+        '<div class="row" style="margin-top:16px"><button class="btn" type="submit">Add payment</button><span class="hint" id="pMsg" aria-live="polite"></span></div></form>';
+      var rows=payments.slice().sort(function(a,b){return a.date<b.date?1:-1}).map(function(p){
+        return '<tr><td class="mono">'+esc(p.date)+'</td><td>'+esc(name(p.from))+(p.sample?' <span class="pill sample">Sample</span>':'')+'</td><td>'+esc(name(p.to))+'</td><td class="num">'+yuan(p.amount)+'</td>'+
+        '<td><button class="btn ghost sm" data-act="del-pay" data-id="'+p.id+'" type="button" aria-label="Delete payment">Delete</button></td></tr>'}).join('');
+      var tbl=payments.length?'<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Gave</th><th>Received</th><th class="num">Amount</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="tbl-wrap"><div class="empty">No payments logged. Cash between roommates goes here.</div></div>';
+      return sampleNotice()+f+tbl;
+    },
+    balances:function(){
+      var s=stats(state.month),out=outstanding(),max=1;
+      people.forEach(function(p){max=Math.max(max,Math.abs(out[p.id]))});
+      var rows=people.map(function(p){
+        var net=s.paid[p.id]-s.share[p.id],o=out[p.id];
+        return '<tr><td><span class="dot"></span>'+esc(p.name)+'</td><td class="num">'+yuan(s.paid[p.id])+'</td><td class="num">'+yuan(s.share[p.id])+'</td>'+
+        '<td class="num '+cls(net)+'">'+signed(net)+'</td><td class="num '+cls(o)+'"><b>'+signed(o)+'</b></td>'+
+        '<td><div class="bar" aria-hidden="true"><i style="width:'+Math.round(Math.abs(o)/max*100)+'%;background:var(--'+(o<-0.005?'neg':'pos')+')"></i></div></td></tr>'}).join('');
+      return '<div class="row"><div class="field" style="min-width:200px"><label for="mSel">Month</label>'+monthSelect('mSel')+'</div></div>'+
+        '<div class="tbl-wrap"><table><thead><tr><th>Roommate</th><th class="num">Paid</th><th class="num">Share</th><th class="num">Month net</th><th class="num">Outstanding</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+        '<p class="hint" style="margin-top:12px">Paid, Share and Month net follow the month you pick. Outstanding is the running balance including all repayments. Positive means the group owes you. Negative means you owe the group.</p>';
+    },
+    settlement:function(){
+      var out=outstanding();
+      var debt=[],cred=[];
+      people.forEach(function(p){var v=Math.round(out[p.id]*100);if(v<0)debt.push({id:p.id,v:-v});else if(v>0)cred.push({id:p.id,v:v})});
+      // Option A: through coordinator
+      var A=[];
+      people.forEach(function(p){
+        if(p.id===state.coord)return;var v=Math.round(out[p.id]*100);
+        if(v<0)A.push({from:p.id,to:state.coord,v:-v});else if(v>0)A.push({from:state.coord,to:p.id,v:v});
+      });
+      // Option B: greedy
+      var B=[],d=debt.map(function(x){return {id:x.id,v:x.v}}).sort(function(a,b){return b.v-a.v}),c=cred.map(function(x){return {id:x.id,v:x.v}}).sort(function(a,b){return b.v-a.v}),i=0,j=0;
+      while(i<d.length&&j<c.length){var t=Math.min(d[i].v,c[j].v);B.push({from:d[i].id,to:c[j].id,v:t});d[i].v-=t;c[j].v-=t;if(d[i].v===0)i++;if(c[j].v===0)j++}
+      function list(arr,key){
+        if(!arr.length)return '<div class="empty">Everyone is settled. All balances are zero.</div>';
+        return arr.map(function(x,k){return '<div class="xfer"><span><b>'+esc(name(x.from))+'</b> pays <b>'+esc(name(x.to))+'</b> <span class="mono">'+yuan(x.v/100)+'</span></span><button class="btn ghost sm" type="button" data-act="log" data-from="'+x.from+'" data-to="'+x.to+'" data-v="'+x.v+'">Log it</button></div>'}).join('');
+      }
+      return '<div class="row"><div class="field" style="min-width:200px"><label for="cSel">Coordinator (Option A)</label>'+personSelect('cSel',state.coord)+'</div></div>'+
+        '<div class="split-2"><div><div class="sub">Option A · Through the coordinator</div><p class="hint">Fewest transfers. Everyone settles with one person.</p><div style="margin-top:10px">'+list(A)+'</div></div>'+
+        '<div><div class="sub">Option B · Person to person</div><p class="hint">Exact amounts, no middleman.</p><div style="margin-top:10px">'+list(B)+'</div></div></div>'+
+        '<p class="hint" style="margin-top:16px">Make the transfers, then press Log it for each one. Every balance returns to zero.</p>';
+    },
+    report:function(){
+      var tot=0,byCat={},n=0;cats.forEach(function(c){byCat[c]=0});
+      expenses.forEach(function(e){if(state.month!=='all'&&monthOf(e.date)!==state.month)return;tot+=e.amount;n++;byCat[e.cat]=(byCat[e.cat]||0)+e.amount});
+      var s=stats(state.month),mx=1;Object.keys(byCat).forEach(function(k){mx=Math.max(mx,byCat[k])});
+      var bars=Object.keys(byCat).map(function(k){return '<tr><td>'+esc(k)+'</td><td class="num">'+yuan(byCat[k])+'</td><td style="width:45%"><div class="bar" aria-hidden="true"><i style="width:'+Math.round(byCat[k]/mx*100)+'%"></i></div></td><td class="num">'+(tot?Math.round(byCat[k]/tot*100):0)+'%</td></tr>'}).join('');
+      var per=people.map(function(p){return '<tr><td>'+esc(p.name)+'</td><td class="num">'+yuan(s.paid[p.id])+'</td><td class="num">'+yuan(s.share[p.id])+'</td></tr>'}).join('');
+      return '<div class="row"><div class="field" style="min-width:200px"><label for="mSel">Month</label>'+monthSelect('mSel')+'</div></div>'+
+        '<div class="cards" style="margin-top:16px"><div class="card"><div class="lab">Total spent</div><div class="big">'+yuan(tot)+'</div></div><div class="card"><div class="lab">Expenses logged</div><div class="big">'+n+'</div></div><div class="card"><div class="lab">Per roommate, average</div><div class="big">'+yuan(tot/people.length)+'</div></div></div>'+
+        '<div class="split-2"><div class="tbl-wrap" style="margin-top:0"><table><thead><tr><th>Category</th><th class="num">Spent</th><th></th><th class="num">Share</th></tr></thead><tbody>'+bars+'</tbody></table></div>'+
+        '<div class="tbl-wrap" style="margin-top:0"><table><thead><tr><th>Roommate</th><th class="num">Paid</th><th class="num">Share</th></tr></thead><tbody>'+per+'</tbody></table></div></div>';
+    },
+    settings:function(){
+      var pr=people.map(function(p,i){return '<div class="field"><label for="n'+p.id+'">Roommate '+(i+1)+'</label><input type="text" id="n'+p.id+'" data-person="'+p.id+'" value="'+esc(p.name)+'"></div>'}).join('');
+      var cr=cats.map(function(c){return '<span class="pill cat" style="font-size:13px;padding:4px 12px">'+esc(c)+'</span>'}).join(' ');
+      return '<div class="sub">Roommates</div><p class="hint" style="margin-bottom:12px">Rename anyone. Every tab updates.</p><div class="form-grid">'+pr+'</div>'+
+        '<div class="sub" style="margin-top:24px">Categories</div><div class="row" style="margin-top:8px">'+cr+'</div>'+
+        '<form id="catForm" class="row" style="margin-top:14px"><div class="field" style="min-width:200px"><label for="newCat">New category</label><input type="text" id="newCat" placeholder="Rent, Internet"></div><button class="btn" type="submit">Add category</button></form>';
+    }
+  };
+
+  function render(){
+    var tabs=$('#tabs');
+    tabs.innerHTML=TABS.map(function(t){return '<button class="tab" role="tab" type="button" data-tab="'+t[0]+'" aria-selected="'+(state.tab===t[0])+'">'+t[1]+'</button>'}).join('');
+    $('#panels').innerHTML='<div class="panel" role="tabpanel">'+views[state.tab]()+'</div>';
+  }
+  function keep(fn){var y=window.scrollY;fn();render();window.scrollTo(0,y)}
+
+  document.addEventListener('click',function(ev){
+    var t=ev.target.closest('[data-tab],[data-act]');if(!t)return;
+    if(t.dataset.tab){state.tab=t.dataset.tab;render();return}
+    var a=t.dataset.act,id=+t.dataset.id;
+    if(a==='del-exp')keep(function(){expenses=expenses.filter(function(e){return e.id!==id})});
+    if(a==='del-pay')keep(function(){payments=payments.filter(function(p){return p.id!==id})});
+    if(a==='clear-samples')keep(function(){expenses=expenses.filter(function(e){return !e.sample});payments=payments.filter(function(p){return !p.sample})});
+    if(a==='log')keep(function(){payments.push({id:nid++,date:today(),from:t.dataset.from,to:t.dataset.to,amount:+t.dataset.v/100})});
+  });
+  document.addEventListener('change',function(ev){
+    var t=ev.target;
+    if(t.id==='mSel'){state.month=t.value;render()}
+    if(t.id==='cSel'){state.coord=t.value;render()}
+  });
+  document.addEventListener('input',function(ev){
+    var t=ev.target;
+    if(t.dataset&&t.dataset.person){people.forEach(function(p){if(p.id===t.dataset.person)p.name=t.value||p.name})}
+  });
+  document.addEventListener('focusout',function(ev){if(ev.target.dataset&&ev.target.dataset.person)render()});
+  document.addEventListener('submit',function(ev){
+    ev.preventDefault();var f=ev.target;
+    if(f.id==='expForm'){
+      var split=[].slice.call(f.querySelectorAll('[name=eSplit]:checked')).map(function(c){return c.value});
+      if(!split.length){$('#eMsg').textContent='Tick at least one person who shares this.';return}
+      var amt=parseFloat($('#eAmt').value);if(!(amt>0))return;
+      expenses.push({id:nid++,date:$('#eDate').value,what:$('#eWhat').value.trim(),cat:$('#eCat').value,amount:amt,paidBy:$('#ePaid').value,split:split});
+      render();
+    }
+    if(f.id==='payForm'){
+      var a=parseFloat($('#pAmt').value);
+      if($('#pFrom').value===$('#pTo').value){$('#pMsg').textContent='Choose two different people.';return}
+      if(!(a>0))return;
+      payments.push({id:nid++,date:$('#pDate').value,from:$('#pFrom').value,to:$('#pTo').value,amount:a});render();
+    }
+    if(f.id==='catForm'){var v=$('#newCat').value.trim();if(v&&cats.indexOf(v)<0){cats.push(v);render()}}
+  });
+
+  // theme toggle
+  var root=document.documentElement;
+  $('#themeBtn').addEventListener('click',function(){
+    var dark=root.dataset.theme?root.dataset.theme==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme=dark?'light':'dark';
+  });
+  render();
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,7 @@
+{
+  "name": "Hostel Room Expense Tracker",
+  "description": "Collaborative shared ledger, smart debt settlement, and monthly balance tracker for hostel roommates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -10,11 +10,13 @@ View your app in AI Studio: https://ai.studio/apps/bb7e867f-af43-4b23-87ab-7cd30
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js 20+
 
+1. Install dependencies: `npm install`
+2. Copy `.env.example` → `.env` and set:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_PUBLISHABLE_KEY`
+3. In Supabase SQL Editor, run `supabase/schema.sql` then `supabase/rls.sql`
+4. Run the app: `npm run dev`
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+On Vercel, add the same `VITE_SUPABASE_*` env vars.

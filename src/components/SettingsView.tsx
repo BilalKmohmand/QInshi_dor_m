@@ -126,7 +126,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     e.preventDefault();
     if (!newRoommateName.trim()) return;
 
-    const newId = `r_${Date.now()}`;
+    const newId = crypto.randomUUID();
     const nextColor = COLOR_PALETTE[roommates.length % COLOR_PALETTE.length];
 
     const updated = [

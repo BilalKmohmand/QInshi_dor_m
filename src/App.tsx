@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, startTransition } from 'react';
 import {
   Expense,
   Payment,
@@ -6,33 +6,41 @@ import {
   KittyDeposit,
   RoomSettings,
   SettlementTransfer,
+  PaymentRequest,
+  AppNotification,
+  AuditLog,
+  UserSession,
 } from './types';
 import {
   INITIAL_ROOMMATES,
   INITIAL_CATEGORIES,
-  SAMPLE_EXPENSES,
-  SAMPLE_PAYMENTS,
+  INITIAL_EXPENSES,
+  INITIAL_PAYMENTS,
+  INITIAL_KITTY_DEPOSITS,
   monthOf,
   calculateOutstandingBalances,
   calculateOptionBSettlements,
   calculateKittySummary,
+  calculateTotalPendingSettlementAmount,
 } from './utils/calculator';
 import {
-  loadRoomSnapshot,
-  updateRoomSettings,
-  syncRoommates,
-  syncCategories,
-  upsertExpense,
-  deleteExpense as apiDeleteExpense,
-  insertPayment,
-  deletePayment as apiDeletePayment,
-  insertKittyDeposit,
-  deleteKittyDeposit as apiDeleteKittyDeposit,
-  clearTransactions,
-  deleteSampleRows,
-  replaceRoomLedger,
+  fetchCompleteRoomData,
+  saveExpenseToSupabase,
+  deleteExpenseFromSupabase,
+  savePaymentToSupabase,
+  deletePaymentFromSupabase,
+  saveKittyDepositToSupabase,
+  deleteKittyDepositFromSupabase,
+  updateRoomSettingsInSupabase,
+  updateRoommatesInSupabase,
+  savePaymentRequestToSupabase,
+  saveNotificationToSupabase,
+  markNotificationReadInSupabase,
+  saveAuditLogToSupabase,
+  DEFAULT_ROOM_ID,
   newId,
-} from './lib/api';
+  supabase,
+} from './utils/supabaseClient';
 import { Header, TabKey } from './components/Header';
 import { HeroMasthead } from './components/HeroMasthead';
 import { ExpensesView } from './components/ExpensesView';
@@ -42,57 +50,52 @@ import { SettlementView } from './components/SettlementView';
 import { ReportView } from './components/ReportView';
 import { KittyView } from './components/KittyView';
 import { SettingsView } from './components/SettingsView';
+import { RoommatesView } from './components/RoommatesView';
+import { AdminPaymentRequestsView } from './components/AdminPaymentRequestsView';
+import { AuditLogView } from './components/AuditLogView';
 import { ExpenseModal } from './components/ExpenseModal';
+import { DebtBreakdownModal } from './components/DebtBreakdownModal';
+import { PaymentRequestModal } from './components/PaymentRequestModal';
+import { AuthModal } from './components/AuthModal';
 import { RulesSection } from './components/RulesSection';
 import { ViewerDashboard } from './components/ViewerDashboard';
+import { RoommateDashboard } from './components/RoommateDashboard';
 
+const STORAGE_KEY = 'hostel_room_tracker_state_v2';
 const THEME_KEY = 'hostel_room_theme';
-const VIEWER_KEY = 'hostel_room_viewer_mode';
+const SESSION_KEY = 'hostel_room_user_session';
+const REQUESTS_KEY = 'hostel_payment_requests_v2';
+const NOTIFICATIONS_KEY = 'hostel_notifications_v2';
+const AUDIT_LOGS_KEY = 'hostel_audit_logs_v2';
 
 const DEFAULT_SETTINGS: RoomSettings = {
+  id: DEFAULT_ROOM_ID,
   roomName: 'Hostel Room 304',
   roomNumber: '304',
   currency: 'CNY',
   currencySymbol: '¥',
   monthlyBudget: 1500,
-  defaultCoordinator: '',
+  defaultCoordinator: 'c82701e8-7e77-4b6d-a764-7b6dfec20786', // Bilal's ID
+  adminPin: undefined,
 };
 
-function remapLegacyId(legacyId: string, roommates: Roommate[]): string {
-  if (legacyId === 'KITTY') return 'KITTY';
-  const idx = INITIAL_ROOMMATES.findIndex((r) => r.id === legacyId);
-  if (idx >= 0 && roommates[idx]) return roommates[idx].id;
-  const byName = roommates.find(
-    (r) => r.name.toLowerCase() === INITIAL_ROOMMATES.find((x) => x.id === legacyId)?.name.toLowerCase()
-  );
-  return byName?.id || roommates[0]?.id || legacyId;
+const PINS_KEY = 'hostel_room_pins_v1';
+
+function loadPinMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(PINS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
 }
 
-function remapSampleExpenses(roommates: Roommate[]): Expense[] {
-  return SAMPLE_EXPENSES.map((e) => ({
-    ...e,
-    id: newId(),
-    paidBy: remapLegacyId(e.paidBy, roommates),
-    split: e.split.map((id) => remapLegacyId(id, roommates)),
-    sample: false,
-  }));
-}
-
-function remapSamplePayments(roommates: Roommate[]): Payment[] {
-  return SAMPLE_PAYMENTS.map((p) => ({
-    ...p,
-    id: newId(),
-    from: remapLegacyId(p.from, roommates),
-    to: remapLegacyId(p.to, roommates),
-    sample: false,
-  }));
+function savePinMap(map: Record<string, string>) {
+  localStorage.setItem(PINS_KEY, JSON.stringify(map));
 }
 
 export default function App() {
-  const [roomId, setRoomId] = useState<string | null>(null);
-  const [bootstrapping, setBootstrapping] = useState(true);
-  const [bootError, setBootError] = useState<string | null>(null);
-
+  // Theme state
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved !== null) return saved === 'dark';
@@ -109,93 +112,301 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  const [roommates, setRoommates] = useState<Roommate[]>([]);
-  const [categories, setCategories] = useState<string[]>(INITIAL_CATEGORIES);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [kittyDeposits, setKittyDeposits] = useState<KittyDeposit[]>([]);
-  const [settings, setSettings] = useState<RoomSettings>(DEFAULT_SETTINGS);
+  // Loading state for Supabase
+  const [isLoadingSupabase, setIsLoadingSupabase] = useState<boolean>(true);
+  const [supabaseConnected, setSupabaseConnected] = useState<boolean>(false);
 
+  // Core Data States
+  const [roommates, setRoommates] = useState<Roommate[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY}_roommates`);
+    return saved ? JSON.parse(saved) : INITIAL_ROOMMATES;
+  });
+
+  const [categories, setCategories] = useState<string[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY}_categories`);
+    return saved ? JSON.parse(saved) : INITIAL_CATEGORIES;
+  });
+
+  const [expenses, setExpenses] = useState<Expense[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY}_expenses`);
+    if (!saved) return INITIAL_EXPENSES;
+    try {
+      const parsed: Expense[] = JSON.parse(saved);
+      return parsed.filter((e) => !e.sample);
+    } catch {
+      return INITIAL_EXPENSES;
+    }
+  });
+
+  const [payments, setPayments] = useState<Payment[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY}_payments`);
+    if (!saved) return INITIAL_PAYMENTS;
+    try {
+      const parsed: Payment[] = JSON.parse(saved);
+      return parsed.filter((p) => !p.sample);
+    } catch {
+      return INITIAL_PAYMENTS;
+    }
+  });
+
+  const [kittyDeposits, setKittyDeposits] = useState<KittyDeposit[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY}_kitty`);
+    return saved ? JSON.parse(saved) : INITIAL_KITTY_DEPOSITS;
+  });
+
+  const [settings, setSettings] = useState<RoomSettings>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY}_settings`);
+    if (!saved) return DEFAULT_SETTINGS;
+    try {
+      const parsed = JSON.parse(saved) as RoomSettings;
+      // Drop legacy shared placeholder admin PIN
+      if (parsed.adminPin === '7575' || parsed.adminPin === '1234') {
+        parsed.adminPin = undefined;
+      }
+      return { ...DEFAULT_SETTINGS, ...parsed };
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
+
+  // One-time scrub of legacy shared placeholder roommate PINs
+  useEffect(() => {
+    const map = loadPinMap();
+    let changed = false;
+    Object.keys(map).forEach((id) => {
+      if (map[id] === '1234' || map[id] === '7575') {
+        delete map[id];
+        changed = true;
+      }
+    });
+    if (changed) savePinMap(map);
+    setRoommates((prev) =>
+      prev.map((r) =>
+        r.pin === '1234' || r.pin === '7575' ? { ...r, pin: undefined } : r
+      )
+    );
+  }, []);
+
+  // User Session State
+  const [userSession, setUserSession] = useState<UserSession>(() => {
+    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    const forceMode = urlParams?.get('mode');
+
+    if (forceMode === 'viewer') {
+      return {
+        isLoggedIn: false,
+        role: 'viewer',
+        roommateId: null,
+        roommateName: null,
+        email: null,
+      };
+    }
+
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+
+    // Default to Viewer mode if no session is stored (so visitors only see the public dashboard)
+    return {
+      isLoggedIn: false,
+      role: 'viewer',
+      roommateId: null,
+      roommateName: null,
+      email: null,
+    };
+  });
+
+  // Payment Requests State
+  const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>(() => {
+    const saved = localStorage.getItem(REQUESTS_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+    return [];
+  });
+
+  // Notifications State
+  const [notifications, setNotifications] = useState<AppNotification[]>(() => {
+    const saved = localStorage.getItem(NOTIFICATIONS_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+    return [];
+  });
+
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    const saved = localStorage.getItem(AUDIT_LOGS_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+    return [];
+  });
+
+  // Sync to local storage
+  useEffect(() => {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(userSession));
+  }, [userSession]);
+
+  useEffect(() => {
+    localStorage.setItem(REQUESTS_KEY, JSON.stringify(paymentRequests));
+  }, [paymentRequests]);
+
+  useEffect(() => {
+    localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
+  }, [notifications]);
+
+  useEffect(() => {
+    localStorage.setItem(AUDIT_LOGS_KEY, JSON.stringify(auditLogs));
+  }, [auditLogs]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_roommates`, JSON.stringify(roommates));
+  }, [roommates]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_categories`, JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_expenses`, JSON.stringify(expenses));
+  }, [expenses]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_payments`, JSON.stringify(payments));
+  }, [payments]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_kitty`, JSON.stringify(kittyDeposits));
+  }, [kittyDeposits]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_settings`, JSON.stringify(settings));
+  }, [settings]);
+
+  // Toast feedback
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => {
+      setToastMsg((curr) => (curr === msg ? null : curr));
+    }, 4000);
+  }, []);
+
+  // Fetch real data from live Supabase on mount
+  useEffect(() => {
+    let isMounted = true;
+    async function loadData() {
+      try {
+        setIsLoadingSupabase(true);
+        const data = await fetchCompleteRoomData(DEFAULT_ROOM_ID);
+        if (!isMounted) return;
+
+        const pinMap = loadPinMap();
+        startTransition(() => {
+          if (data.roommates && data.roommates.length > 0) {
+            setRoommates(
+              data.roommates.map((r) => ({
+                ...r,
+                pin: pinMap[r.id] || r.pin,
+              }))
+            );
+          }
+          if (data.categories && data.categories.length > 0) {
+            setCategories(data.categories);
+          }
+          if (data.expenses) {
+            setExpenses(data.expenses.filter((e) => !e.sample));
+          }
+          if (data.payments) {
+            setPayments(data.payments.filter((p) => !p.sample));
+          }
+          if (data.kittyDeposits) {
+            setKittyDeposits(data.kittyDeposits);
+          }
+          if (data.settings) {
+            setSettings((prev) => ({
+              ...data.settings,
+              adminPin: prev.adminPin || data.settings.adminPin,
+            }));
+          }
+          if (data.paymentRequests) setPaymentRequests(data.paymentRequests);
+          if (data.notifications) setNotifications(data.notifications);
+          if (data.auditLogs) setAuditLogs(data.auditLogs);
+          setSupabaseConnected(true);
+        });
+      } catch (err) {
+        console.warn('Could not sync with Supabase, using cached records:', err);
+        setSupabaseConnected(false);
+      } finally {
+        if (isMounted) setIsLoadingSupabase(false);
+      }
+    }
+
+    loadData();
+
+    // Check if Supabase has an active auth session
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session?.user && isMounted) {
+        const email = data.session.user.email || '';
+        const isBilal = email.toLowerCase().includes('bilal') || email.toLowerCase().includes('admin');
+        const matched = roommates.find((r) => email.toLowerCase().includes(r.name.toLowerCase()));
+
+        setUserSession((prev) => {
+          if (prev.isLoggedIn) return prev;
+          return {
+            isLoggedIn: true,
+            role: isBilal ? 'admin' : 'roommate',
+            roommateId: matched ? matched.id : isBilal ? settings.defaultCoordinator : roommates[0]?.id || null,
+            roommateName: matched ? matched.name : isBilal ? 'Bilal (Coordinator)' : 'Roommate',
+            email,
+          };
+        });
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // UI Navigation & View State
   const [currentTab, setCurrentTab] = useState<TabKey>('expenses');
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
   const [isHeroCollapsed, setIsHeroCollapsed] = useState<boolean>(false);
 
-  const [isViewerMode, setIsViewerMode] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('mode') === 'viewer' || params.get('view') === 'dashboard') {
-        return true;
-      }
-    }
-    return localStorage.getItem(VIEWER_KEY) === 'true';
-  });
-
+  // Modals
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
-    setTimeout(() => {
-      setToastMsg((curr) => (curr === msg ? null : curr));
-    }, 3500);
-  };
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-  const withErrorToast = async (action: () => Promise<void>, fallback: string) => {
-    try {
-      await action();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : fallback;
-      showToast(message);
-      throw err;
-    }
-  };
+  const [breakdownOtherId, setBreakdownOtherId] = useState<string | null>(null);
+  const [isBreakdownModalOpen, setIsBreakdownModalOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const snap = await loadRoomSnapshot();
-        if (cancelled) return;
-        setRoomId(snap.roomId);
-        setSettings(snap.settings);
-        setRoommates(snap.roommates);
-        setCategories(snap.categories.length ? snap.categories : INITIAL_CATEGORIES);
-        setExpenses(snap.expenses);
-        setPayments(snap.payments);
-        setKittyDeposits(snap.kittyDeposits);
-        setBootError(null);
-      } catch (err) {
-        if (cancelled) return;
-        setBootError(err instanceof Error ? err.message : 'Failed to load room data from Supabase.');
-      } finally {
-        if (!cancelled) setBootstrapping(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [isPaymentRequestModalOpen, setIsPaymentRequestModalOpen] = useState(false);
+  const [requestInitialFromId, setRequestInitialFromId] = useState<string | undefined>();
+  const [requestInitialToId, setRequestInitialToId] = useState<string | undefined>();
+  const [requestInitialAmount, setRequestInitialAmount] = useState<number | undefined>();
 
-  const toggleViewerMode = () => {
-    setIsViewerMode((prev) => {
-      const next = !prev;
-      localStorage.setItem(VIEWER_KEY, String(next));
-      if (typeof window !== 'undefined') {
-        const url = new URL(window.location.href);
-        if (next) {
-          url.searchParams.set('mode', 'viewer');
-        } else {
-          url.searchParams.delete('mode');
-          url.searchParams.delete('view');
-        }
-        window.history.replaceState({}, '', url.toString());
-      }
-      showToast(next ? 'Switched to Public View-Only Dashboard.' : 'Roommate Mode: Editing unlocked.');
-      return next;
-    });
-  };
-
+  // Months computation
   const allMonths = useMemo(() => {
     const set = new Set<string>();
     expenses.forEach((e) => {
@@ -209,6 +420,7 @@ export default function App() {
     return Array.from(set).sort().reverse();
   }, [expenses, payments]);
 
+  // Outstanding balances & settlement
   const outstanding = useMemo(
     () => calculateOutstandingBalances(expenses, payments, roommates),
     [expenses, payments, roommates]
@@ -219,11 +431,74 @@ export default function App() {
     [outstanding]
   );
 
+  const totalSettlementAmount = useMemo(
+    () => calculateTotalPendingSettlementAmount(optionBSettlements),
+    [optionBSettlements]
+  );
+
   const kittySummary = useMemo(
     () => calculateKittySummary(kittyDeposits, expenses),
     [kittyDeposits, expenses]
   );
 
+  // Unread notifications & pending requests count
+  const unreadCount = useMemo(() => {
+    if (!userSession.roommateId) return 0;
+    return notifications.filter(
+      (n) => (n.recipientId === userSession.roommateId || n.recipientId === 'ALL') && !n.isRead
+    ).length;
+  }, [notifications, userSession.roommateId]);
+
+  const pendingRequestsCount = useMemo(() => {
+    return paymentRequests.filter((r) => r.status === 'pending').length;
+  }, [paymentRequests]);
+
+  // Helper to append audit log
+  const logAudit = useCallback((
+    action: string,
+    entityType: AuditLog['entityType'],
+    details: string,
+    amount?: number,
+    entityId?: string
+  ) => {
+    const newLog: AuditLog = {
+      id: newId(),
+      actorId: userSession.roommateId || 'coordinator',
+      actorName: userSession.roommateName || 'Coordinator',
+      action,
+      entityType,
+      entityId,
+      amount,
+      details,
+      timestamp: new Date().toISOString(),
+    };
+    setAuditLogs((prev) => [newLog, ...prev]);
+    saveAuditLogToSupabase(DEFAULT_ROOM_ID, newLog).catch(console.error);
+  }, [userSession]);
+
+  // Helper to send notification
+  const sendNotification = useCallback((
+    recipientId: string,
+    title: string,
+    message: string,
+    type: AppNotification['type'],
+    relatedId?: string
+  ) => {
+    const newNotif: AppNotification = {
+      id: newId(),
+      recipientId,
+      title,
+      message,
+      type,
+      isRead: false,
+      relatedId,
+      createdAt: new Date().toISOString(),
+    };
+    setNotifications((prev) => [newNotif, ...prev]);
+    saveNotificationToSupabase(DEFAULT_ROOM_ID, newNotif).catch(console.error);
+  }, []);
+
+  // Handlers for Expenses
   const handleOpenAddExpense = () => {
     setExpenseToEdit(null);
     setIsExpenseModalOpen(true);
@@ -235,7 +510,6 @@ export default function App() {
   };
 
   const handleDuplicateExpense = async (expense: Expense) => {
-    if (!roomId) return;
     const duplicated: Expense = {
       ...expense,
       id: newId(),
@@ -243,121 +517,109 @@ export default function App() {
       what: `${expense.what} (copy)`,
       sample: false,
     };
+    setExpenses((prev) => [duplicated, ...prev]);
+    showToast(`Duplicated "${expense.what}" to today's ledger.`);
+    logAudit('Duplicated expense', 'expense', `Duplicated "${expense.what}"`, duplicated.amount, duplicated.id);
+
     try {
-      await withErrorToast(() => upsertExpense(roomId, duplicated), 'Failed to duplicate expense.');
-      setExpenses((prev) => [duplicated, ...prev]);
-      showToast(`Duplicated "${expense.what}" to today's ledger.`);
-    } catch {
-      /* toasted */
+      await saveExpenseToSupabase(DEFAULT_ROOM_ID, duplicated);
+    } catch (err) {
+      console.error('Supabase write error:', err);
     }
   };
 
   const handleSaveExpense = async (expenseData: Omit<Expense, 'id'> | Expense) => {
-    if (!roomId) return;
     if ('id' in expenseData && expenseData.id) {
+      // Update
       const updated = expenseData as Expense;
+      setExpenses((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+      showToast(`Updated expense "${updated.what}".`);
+      logAudit('Updated expense', 'expense', `Updated "${updated.what}"`, updated.amount, updated.id);
+
       try {
-        await withErrorToast(() => upsertExpense(roomId, updated), 'Failed to update expense.');
-        setExpenses((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
-        showToast(`Updated expense "${updated.what}".`);
-      } catch {
-        /* toasted */
+        await saveExpenseToSupabase(DEFAULT_ROOM_ID, updated);
+      } catch (err) {
+        console.error('Supabase write error:', err);
       }
     } else {
-      const newExp: Expense = { ...expenseData, id: newId() };
+      // Create
+      const newExp: Expense = {
+        ...expenseData,
+        id: newId(),
+      };
+      setExpenses((prev) => [newExp, ...prev]);
+      showToast(`Logged purchase "${newExp.what}" for ${settings.currencySymbol}${newExp.amount.toFixed(2)}.`);
+      logAudit('Added expense', 'expense', `Added "${newExp.what}" paid by ${newExp.paidBy}`, newExp.amount, newExp.id);
+
+      // Notify roommates in split
+      newExp.split.forEach((rmId) => {
+        if (rmId !== newExp.paidBy) {
+          sendNotification(
+            rmId,
+            'New Shared Expense',
+            `${newExp.what} logged for ${settings.currencySymbol}${newExp.amount.toFixed(2)}. Your share has been allocated.`,
+            'expense_added',
+            newExp.id
+          );
+        }
+      });
+
       try {
-        await withErrorToast(() => upsertExpense(roomId, newExp), 'Failed to save expense.');
-        setExpenses((prev) => [newExp, ...prev]);
-        showToast(
-          `Logged purchase "${newExp.what}" for ${settings.currencySymbol}${newExp.amount.toFixed(2)}.`
-        );
-      } catch {
-        /* toasted */
+        await saveExpenseToSupabase(DEFAULT_ROOM_ID, newExp);
+      } catch (err) {
+        console.error('Supabase write error:', err);
       }
     }
   };
 
   const handleDeleteExpense = async (id: string) => {
-    if (!roomId) return;
+    const exp = expenses.find((e) => e.id === id);
+    setExpenses((prev) => prev.filter((e) => e.id !== id));
+    showToast('Expense removed from ledger.');
+    if (exp) {
+      logAudit('Deleted expense', 'expense', `Removed "${exp.what}"`, exp.amount, id);
+    }
+
     try {
-      await withErrorToast(() => apiDeleteExpense(id), 'Failed to delete expense.');
-      setExpenses((prev) => prev.filter((e) => e.id !== id));
-      showToast('Expense removed from ledger.');
-    } catch {
-      /* toasted */
+      await deleteExpenseFromSupabase(id);
+    } catch (err) {
+      console.error('Supabase delete error:', err);
     }
   };
 
-  const handleClearSamples = async () => {
-    if (!roomId) return;
-    try {
-      await withErrorToast(() => deleteSampleRows(roomId), 'Failed to clear samples.');
-      setExpenses((prev) => prev.filter((e) => !e.sample));
-      setPayments((prev) => prev.filter((p) => !p.sample));
-      showToast('Deleted all sample rows.');
-    } catch {
-      /* toasted */
-    }
-  };
-
-  const handleRestoreSamples = async () => {
-    if (!roomId) return;
-    const nextRoommates = roommates.length ? roommates : INITIAL_ROOMMATES.map((r) => ({ ...r, id: newId() }));
-    const sampleExpenses = remapSampleExpenses(nextRoommates);
-    const samplePayments = remapSamplePayments(nextRoommates);
-    try {
-      await withErrorToast(
-        () =>
-          replaceRoomLedger(roomId, {
-            settings: {
-              ...settings,
-              defaultCoordinator: nextRoommates[0]?.id || settings.defaultCoordinator,
-            },
-            roommates: nextRoommates,
-            categories: categories.length ? categories : INITIAL_CATEGORIES,
-            expenses: sampleExpenses,
-            payments: samplePayments,
-            kittyDeposits: [],
-          }),
-        'Failed to load sample data.'
-      );
-      setRoommates(nextRoommates);
-      setExpenses(sampleExpenses);
-      setPayments(samplePayments);
-      setKittyDeposits([]);
-      showToast('Loaded sample data.');
-    } catch {
-      /* toasted */
-    }
-  };
-
+  // Handlers for Payments
   const handleAddPayment = async (paymentData: Omit<Payment, 'id'>) => {
-    if (!roomId) return;
-    const newPayment: Payment = { ...paymentData, id: newId() };
+    const newPayment: Payment = {
+      ...paymentData,
+      id: newId(),
+    };
+    setPayments((prev) => [newPayment, ...prev]);
+    showToast(`Recorded repayment of ${settings.currencySymbol}${newPayment.amount.toFixed(2)}.`);
+    logAudit('Added payment', 'payment', `Recorded repayment from ${newPayment.from} to ${newPayment.to}`, newPayment.amount, newPayment.id);
+
     try {
-      await withErrorToast(() => insertPayment(roomId, newPayment), 'Failed to save payment.');
-      setPayments((prev) => [newPayment, ...prev]);
-      showToast(
-        `Recorded repayment of ${settings.currencySymbol}${newPayment.amount.toFixed(2)}.`
-      );
-    } catch {
-      /* toasted */
+      await savePaymentToSupabase(DEFAULT_ROOM_ID, newPayment);
+    } catch (err) {
+      console.error('Supabase save payment error:', err);
     }
   };
 
   const handleDeletePayment = async (id: string) => {
-    if (!roomId) return;
+    const pay = payments.find((p) => p.id === id);
+    setPayments((prev) => prev.filter((p) => p.id !== id));
+    showToast('Payment record deleted.');
+    if (pay) {
+      logAudit('Deleted payment', 'payment', `Deleted payment record`, pay.amount, id);
+    }
+
     try {
-      await withErrorToast(() => apiDeletePayment(id), 'Failed to delete payment.');
-      setPayments((prev) => prev.filter((p) => p.id !== id));
-      showToast('Payment record deleted.');
-    } catch {
-      /* toasted */
+      await deletePaymentFromSupabase(id);
+    } catch (err) {
+      console.error('Supabase delete payment error:', err);
     }
   };
 
   const handleRecordSettlementPayment = async (transfer: SettlementTransfer) => {
-    if (!roomId) return;
     const newPayment: Payment = {
       id: newId(),
       date: new Date().toISOString().slice(0, 10),
@@ -367,175 +629,319 @@ export default function App() {
       note: 'Settlement transfer',
       sample: false,
     };
+    setPayments((prev) => [newPayment, ...prev]);
+    showToast(`Settlement transfer of ${settings.currencySymbol}${transfer.amount.toFixed(2)} recorded and cleared!`);
+    logAudit('Settlement executed', 'payment', `Settlement payment completed`, transfer.amount, newPayment.id);
+
     try {
-      await withErrorToast(() => insertPayment(roomId, newPayment), 'Failed to record settlement.');
-      setPayments((prev) => [newPayment, ...prev]);
-      showToast(
-        `Settlement transfer of ${settings.currencySymbol}${transfer.amount.toFixed(2)} recorded and cleared!`
-      );
-    } catch {
-      /* toasted */
+      await savePaymentToSupabase(DEFAULT_ROOM_ID, newPayment);
+    } catch (err) {
+      console.error('Supabase save payment error:', err);
     }
   };
 
+  // Handlers for Kitty
   const handleAddKittyDeposit = async (depositData: Omit<KittyDeposit, 'id'>) => {
-    if (!roomId) return;
-    const newDeposit: KittyDeposit = { ...depositData, id: newId() };
+    const newDeposit: KittyDeposit = {
+      ...depositData,
+      id: newId(),
+    };
+    setKittyDeposits((prev) => [newDeposit, ...prev]);
+    showToast(`Deposited ${settings.currencySymbol}${newDeposit.amount.toFixed(2)} into the room kitty.`);
+    logAudit('Added kitty deposit', 'kitty', `Deposit by ${depositData.roommateId}`, depositData.amount, newDeposit.id);
+
     try {
-      await withErrorToast(() => insertKittyDeposit(roomId, newDeposit), 'Failed to save deposit.');
-      setKittyDeposits((prev) => [newDeposit, ...prev]);
-      showToast(
-        `Deposited ${settings.currencySymbol}${newDeposit.amount.toFixed(2)} into the room kitty.`
-      );
-    } catch {
-      /* toasted */
+      await saveKittyDepositToSupabase(DEFAULT_ROOM_ID, newDeposit);
+    } catch (err) {
+      console.error('Supabase save kitty error:', err);
     }
   };
 
   const handleDeleteKittyDeposit = async (id: string) => {
-    if (!roomId) return;
+    setKittyDeposits((prev) => prev.filter((d) => d.id !== id));
+    showToast('Kitty deposit removed.');
+    logAudit('Deleted kitty deposit', 'kitty', `Removed deposit ${id}`);
+
     try {
-      await withErrorToast(() => apiDeleteKittyDeposit(id), 'Failed to delete deposit.');
-      setKittyDeposits((prev) => prev.filter((d) => d.id !== id));
-      showToast('Kitty deposit removed.');
-    } catch {
-      /* toasted */
+      await deleteKittyDepositFromSupabase(id);
+    } catch (err) {
+      console.error('Supabase delete kitty error:', err);
     }
   };
 
-  const handleUpdateSettings = async (next: RoomSettings) => {
-    if (!roomId) return;
-    setSettings(next);
-    try {
-      await withErrorToast(() => updateRoomSettings(roomId, next), 'Failed to save settings.');
-    } catch {
-      /* toasted */
-    }
+  // Payment Requests Workflow
+  const handleOpenPaymentRequestModal = (fromId?: string, toId?: string, amount?: number) => {
+    setRequestInitialFromId(fromId || userSession.roommateId || roommates[0]?.id);
+    setRequestInitialToId(toId || roommates.find((r) => r.id !== fromId)?.id || roommates[1]?.id);
+    setRequestInitialAmount(amount);
+    setIsPaymentRequestModalOpen(true);
   };
 
-  const handleUpdateRoommates = async (next: Roommate[]) => {
-    if (!roomId) return;
-    setRoommates(next);
-    try {
-      await withErrorToast(() => syncRoommates(roomId, next), 'Failed to sync roommates.');
-    } catch {
-      /* toasted */
-    }
-  };
-
-  const handleUpdateCategories = async (next: string[]) => {
-    if (!roomId) return;
-    setCategories(next);
-    try {
-      await withErrorToast(() => syncCategories(roomId, next), 'Failed to sync categories.');
-    } catch {
-      /* toasted */
-    }
-  };
-
-  const handleClearAllData = async () => {
-    if (!roomId) return;
-    try {
-      await withErrorToast(() => clearTransactions(roomId), 'Failed to wipe ledger.');
-      setExpenses([]);
-      setPayments([]);
-      setKittyDeposits([]);
-      showToast('All transaction records wiped.');
-    } catch {
-      /* toasted */
-    }
-  };
-
-  const handleImportJsonData = async (data: {
-    settings: RoomSettings;
-    roommates: Roommate[];
-    categories: string[];
-    expenses: Expense[];
-    payments: Payment[];
-    kittyDeposits?: KittyDeposit[];
-  }) => {
-    if (!roomId) return;
-    const payload = {
-      settings: data.settings,
-      roommates: data.roommates,
-      categories: data.categories,
-      expenses: (data.expenses || []).map((e) => ({ ...e, id: e.id || newId(), sample: false })),
-      payments: (data.payments || []).map((p) => ({ ...p, id: p.id || newId(), sample: false })),
-      kittyDeposits: (data.kittyDeposits || []).map((d) => ({ ...d, id: d.id || newId() })),
+  const handleSubmitPaymentRequest = (data: Omit<PaymentRequest, 'id' | 'createdAt' | 'status'>) => {
+    const newRequest: PaymentRequest = {
+      ...data,
+      id: newId(),
+      status: 'pending',
+      createdAt: new Date().toISOString(),
     };
+
+    setPaymentRequests((prev) => [newRequest, ...prev]);
+    showToast(`Payment request of ${settings.currencySymbol}${newRequest.amount.toFixed(2)} submitted for verification.`);
+    logAudit('Submitted payment request', 'payment_request', `Transfer sent via ${newRequest.method}`, newRequest.amount, newRequest.id);
+    savePaymentRequestToSupabase(DEFAULT_ROOM_ID, newRequest).catch(console.error);
+
+    // Notify recipient
+    sendNotification(
+      newRequest.toRoommate,
+      'Payment Confirmation Received',
+      `${roommates.find((r) => r.id === newRequest.fromRoommate)?.name} sent ${settings.currencySymbol}${newRequest.amount.toFixed(2)} via ${newRequest.method}. Please verify and approve.`,
+      'payment_submitted',
+      newRequest.id
+    );
+  };
+
+  const handleApprovePaymentRequest = async (request: PaymentRequest) => {
+    const reviewedBy = userSession.roommateId || settings.defaultCoordinator || null;
+    const reviewedAt = new Date().toISOString();
+    const approved: PaymentRequest = {
+      ...request,
+      status: 'approved',
+      reviewedBy: reviewedBy || undefined,
+      reviewedAt,
+    };
+
+    setPaymentRequests((prev) => prev.map((r) => (r.id === request.id ? approved : r)));
+
+    const newPayment: Payment = {
+      id: newId(),
+      date: request.date,
+      from: request.fromRoommate,
+      to: request.toRoommate,
+      amount: request.amount,
+      note: request.notes ? `${request.method}: ${request.notes}` : `Paid via ${request.method}`,
+      method: request.method,
+      reference: request.reference,
+      requestId: request.id,
+      sample: false,
+    };
+
+    setPayments((prev) => [newPayment, ...prev]);
+    showToast(`Approved! Payment of ${settings.currencySymbol}${request.amount.toFixed(2)} verified and balances updated.`);
+    logAudit('Approved payment request', 'payment_request', `Verified payment from ${request.fromRoommate} to ${request.toRoommate}`, request.amount, request.id);
+
+    sendNotification(
+      request.fromRoommate,
+      'Payment Approved!',
+      `Your payment of ${settings.currencySymbol}${request.amount.toFixed(2)} to ${roommates.find((r) => r.id === request.toRoommate)?.name} has been verified!`,
+      'payment_approved',
+      request.id
+    );
+
     try {
-      await withErrorToast(() => replaceRoomLedger(roomId, payload), 'Failed to import backup.');
-      setSettings(payload.settings);
-      setRoommates(payload.roommates);
-      setCategories(payload.categories);
-      setExpenses(payload.expenses);
-      setPayments(payload.payments);
-      setKittyDeposits(payload.kittyDeposits);
-      showToast('Backup restored successfully!');
-    } catch {
-      /* toasted */
+      await Promise.all([
+        savePaymentRequestToSupabase(DEFAULT_ROOM_ID, approved),
+        savePaymentToSupabase(DEFAULT_ROOM_ID, newPayment),
+      ]);
+    } catch (err) {
+      console.error('Supabase write verified payment error:', err);
     }
   };
 
-  if (bootstrapping) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#EEF2F1] dark:bg-[#0A1213] text-sm text-neutral-600 dark:text-neutral-300">
-        Loading room ledger from Supabase…
-      </div>
+  const handleRejectPaymentRequest = (requestId: string, reason = 'Declined by recipient') => {
+    const target = paymentRequests.find((r) => r.id === requestId);
+    const reviewedBy = userSession.roommateId || settings.defaultCoordinator || undefined;
+    const reviewedAt = new Date().toISOString();
+    setPaymentRequests((prev) =>
+      prev.map((r) =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: 'rejected',
+              reviewedBy,
+              reviewedAt,
+              rejectionReason: reason,
+            }
+          : r
+      )
     );
-  }
 
-  if (bootError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#EEF2F1] dark:bg-[#0A1213] px-6">
-        <div className="max-w-lg w-full rounded-xl border border-red-200 bg-white dark:bg-[#111D1F] dark:border-red-900 p-6 space-y-3">
-          <h1 className="text-base font-bold text-red-700 dark:text-red-300">Supabase connection error</h1>
-          <p className="text-sm text-neutral-700 dark:text-neutral-300">{bootError}</p>
-          <p className="text-xs text-neutral-500">
-            Confirm <code>VITE_SUPABASE_URL</code> / <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>, that the
-            schema seed ran, and that you applied <code>supabase/rls.sql</code> if RLS is blocking.
-          </p>
-          <button
-            type="button"
-            className="text-xs px-3 py-2 rounded-lg bg-[#0B7A6E] text-white"
-            onClick={() => window.location.reload()}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+    showToast('Payment request rejected.');
+    if (target) {
+      const rejected: PaymentRequest = {
+        ...target,
+        status: 'rejected',
+        reviewedBy,
+        reviewedAt,
+        rejectionReason: reason,
+      };
+      savePaymentRequestToSupabase(DEFAULT_ROOM_ID, rejected).catch(console.error);
+      logAudit('Rejected payment request', 'payment_request', `Rejected payment of ${target.amount}. Reason: ${reason}`, target.amount, requestId);
+      sendNotification(
+        target.fromRoommate,
+        'Payment Request Rejected',
+        `Your payment request of ${settings.currencySymbol}${target.amount.toFixed(2)} was not approved. Reason: ${reason}`,
+        'payment_rejected',
+        requestId
+      );
+    }
+  };
+
+  // Detailed Debt Breakdown Modal opener
+  const handleOpenBreakdown = (otherId: string) => {
+    setBreakdownOtherId(otherId);
+    setIsBreakdownModalOpen(true);
+  };
+
+  // Authentication Handlers
+  const handleLoginSuccess = (session: UserSession) => {
+    setUserSession(session);
+    showToast(`Welcome back, ${session.roommateName}!`);
+    logAudit('User login', 'roommate', `Logged in as ${session.roommateName} (${session.role})`);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut().catch(() => {});
+    setUserSession({
+      isLoggedIn: false,
+      role: 'viewer',
+      roommateId: null,
+      roommateName: null,
+      email: null,
+    });
+    showToast('Logged out. Switched to public view-only dashboard.');
+  };
+
+  const handleSwitchToViewer = () => {
+    setUserSession({
+      isLoggedIn: false,
+      role: 'viewer',
+      roommateId: null,
+      roommateName: null,
+      email: null,
+    });
+    showToast('Public Room Dashboard active.');
+  };
+
+  // Profile update from roommate portal
+  const handleUpdateMyProfile = (handle: string, pin?: string) => {
+    if (!userSession.roommateId) return;
+    const nextPin = pin?.trim();
+    if (nextPin) {
+      const map = loadPinMap();
+      map[userSession.roommateId] = nextPin;
+      savePinMap(map);
+    }
+    setRoommates((prev) =>
+      prev.map((r) =>
+        r.id === userSession.roommateId
+          ? {
+              ...r,
+              handle: handle || r.handle,
+              pin: nextPin || r.pin,
+            }
+          : r
+      )
     );
-  }
+    showToast('Profile updated.');
+    logAudit('Updated profile', 'roommate', `Updated profile for ${userSession.roommateName}`);
+    const nextRoommates = roommates.map((r) =>
+      r.id === userSession.roommateId
+        ? { ...r, handle: handle || r.handle, pin: nextPin || r.pin }
+        : r
+    );
+    updateRoommatesInSupabase(DEFAULT_ROOM_ID, nextRoommates).catch(console.error);
+  };
+
+  const handleSetAdminPin = (pin: string) => {
+    setSettings((prev) => {
+      const next = { ...prev, adminPin: pin };
+      localStorage.setItem(`${STORAGE_KEY}_settings`, JSON.stringify(next));
+      return next;
+    });
+    showToast('Admin PIN saved. Keep it private.');
+  };
+
+  const syncRoommatePins = (next: Roommate[]) => {
+    const map = loadPinMap();
+    next.forEach((r) => {
+      if (r.pin?.trim()) map[r.id] = r.pin.trim();
+      else delete map[r.id];
+    });
+    savePinMap(map);
+  };
+
+  // Update Settings & Roommates from views
+  const handleUpdateSettings = async (newSettings: RoomSettings) => {
+    setSettings(newSettings);
+    showToast('Settings saved.');
+    logAudit('Updated settings', 'settings', `Updated room settings`);
+    try {
+      await updateRoomSettingsInSupabase(DEFAULT_ROOM_ID, newSettings);
+    } catch (err) {
+      console.error('Supabase update settings error:', err);
+    }
+  };
+
+  const handleUpdateRoommates = async (newRoommates: Roommate[]) => {
+    syncRoommatePins(newRoommates);
+    setRoommates(newRoommates);
+    showToast('Roommates roster updated.');
+    logAudit('Updated roommates', 'roommate', `Roster now contains ${newRoommates.length} members`);
+    try {
+      await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates);
+    } catch (err) {
+      console.error('Supabase update roommates error:', err);
+    }
+  };
+
+  const handleMarkNotificationRead = (notifId: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
+    );
+    markNotificationReadInSupabase(notifId).catch(console.error);
+  };
 
   return (
-    <div className="min-h-screen bg-[#EEF2F1] dark:bg-[#0A1213] text-[#0E1B1D] dark:text-[#E6F0EE] transition-colors flex flex-col font-sans">
+    <div className="min-h-dvh min-h-screen bg-[#EEF2F1] dark:bg-[#0A1213] text-[#0E1B1D] dark:text-[#E6F0EE] transition-colors flex flex-col font-sans overflow-x-hidden">
+      {/* Top Bar Header */}
       <Header
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
         onOpenNewExpense={handleOpenAddExpense}
         isDarkMode={isDarkMode}
         onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-        isViewerMode={isViewerMode}
-        onToggleViewerMode={toggleViewerMode}
-      />
-
-      <HeroMasthead
-        settings={settings}
+        userSession={userSession}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onLogout={handleLogout}
+        unreadNotificationsCount={unreadCount}
+        pendingRequestsCount={pendingRequestsCount}
         roommates={roommates}
-        totalExpensesCount={expenses.length}
-        totalSettlementTransfers={optionBSettlements.length}
-        isCollapsed={isHeroCollapsed}
-        onToggleCollapse={() => setIsHeroCollapsed(!isHeroCollapsed)}
       />
 
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      {/* Hero / Editorial Masthead (Only in Admin or Viewer mode; Personal roommate dashboard has its own top welcome card) */}
+      {userSession.role !== 'roommate' && (
+        <HeroMasthead
+          settings={settings}
+          roommates={roommates}
+          totalExpensesCount={expenses.length}
+          totalSettlementTransfers={optionBSettlements.length}
+          totalSettlementAmount={totalSettlementAmount}
+          isCollapsed={isHeroCollapsed}
+          onToggleCollapse={() => setIsHeroCollapsed(!isHeroCollapsed)}
+        />
+      )}
+
+      {/* Main Workspace Body */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-8 min-w-0">
+        {/* Toast Notification */}
         {toastMsg && (
           <div className="fixed bottom-6 right-6 z-50 bg-[#0E1B1D] dark:bg-[#1C2C2F] text-white px-4 py-2.5 rounded-lg shadow-xl border border-neutral-700 text-xs font-medium animate-in slide-in-from-bottom-3 duration-200">
             {toastMsg}
           </div>
         )}
 
-        {isViewerMode ? (
+        {/* 1. If in Viewer Mode: Render ONLY the unified Public Room Dashboard */}
+        {userSession.role === 'viewer' ? (
           <ViewerDashboard
             expenses={expenses}
             payments={payments}
@@ -546,9 +952,31 @@ export default function App() {
             selectedMonth={selectedMonth}
             onSelectMonth={setSelectedMonth}
             allMonths={allMonths}
-            onSwitchToEditor={toggleViewerMode}
+            onSwitchToEditor={() => setIsAuthModalOpen(true)}
+          />
+        ) : userSession.role === 'roommate' && userSession.roommateId ? (
+          /* 2. If in Roommate Mode: Render the Personal Roommate Dashboard */
+          <RoommateDashboard
+            myRoommateId={userSession.roommateId}
+            roommates={roommates}
+            expenses={expenses}
+            payments={payments}
+            paymentRequests={paymentRequests}
+            notifications={notifications}
+            auditLogs={auditLogs}
+            settings={settings}
+            selectedMonth={selectedMonth}
+            onSelectMonth={setSelectedMonth}
+            allMonths={allMonths}
+            onOpenBreakdown={handleOpenBreakdown}
+            onOpenPaymentRequest={handleOpenPaymentRequestModal}
+            onApprovePaymentRequest={handleApprovePaymentRequest}
+            onRejectPaymentRequest={handleRejectPaymentRequest}
+            onMarkNotificationAsRead={handleMarkNotificationRead}
+            onUpdateMyProfile={handleUpdateMyProfile}
           />
         ) : (
+          /* 3. Admin / Coordinator Suite */
           <>
             {currentTab === 'expenses' && (
               <ExpensesView
@@ -560,8 +988,8 @@ export default function App() {
                 onEditExpense={handleEditExpense}
                 onDuplicateExpense={handleDuplicateExpense}
                 onDeleteExpense={handleDeleteExpense}
-                onClearSamples={handleClearSamples}
-                onRestoreSamples={handleRestoreSamples}
+                onClearSamples={() => {}}
+                onRestoreSamples={() => {}}
                 selectedMonth={selectedMonth}
                 onSelectMonth={setSelectedMonth}
                 allMonths={allMonths}
@@ -575,6 +1003,16 @@ export default function App() {
                 currencySymbol={settings.currencySymbol}
                 onAddPayment={handleAddPayment}
                 onDeletePayment={handleDeletePayment}
+              />
+            )}
+
+            {currentTab === 'requests' && (
+              <AdminPaymentRequestsView
+                requests={paymentRequests}
+                roommates={roommates}
+                currencySymbol={settings.currencySymbol}
+                onApprove={handleApprovePaymentRequest}
+                onReject={handleRejectPaymentRequest}
               />
             )}
 
@@ -602,6 +1040,17 @@ export default function App() {
                   handleUpdateSettings({ ...settings, defaultCoordinator: id })
                 }
                 onRecordSettlementPayment={handleRecordSettlementPayment}
+              />
+            )}
+
+            {currentTab === 'roommates' && (
+              <RoommatesView
+                roommates={roommates}
+                settings={settings}
+                expenses={expenses}
+                payments={payments}
+                onUpdateRoommates={handleUpdateRoommates}
+                onUpdateSettings={handleUpdateSettings}
               />
             )}
 
@@ -640,30 +1089,40 @@ export default function App() {
                 kittyDeposits={kittyDeposits}
                 onUpdateSettings={handleUpdateSettings}
                 onUpdateRoommates={handleUpdateRoommates}
-                onUpdateCategories={handleUpdateCategories}
-                onRestoreSampleData={handleRestoreSamples}
-                onClearAllData={handleClearAllData}
-                onImportJsonData={handleImportJsonData}
+                onUpdateCategories={setCategories}
+                onRestoreSampleData={() => {}}
+                onClearAllData={() => {}}
+                onImportJsonData={() => {}}
+              />
+            )}
+
+            {currentTab === 'audit' && (
+              <AuditLogView
+                logs={auditLogs}
+                roommates={roommates}
+                currencySymbol={settings.currencySymbol}
               />
             )}
           </>
         )}
 
+        {/* Room Rules & Guide Section */}
         <RulesSection />
       </main>
 
+      {/* Footer */}
       <footer className="border-t border-neutral-200 dark:border-[#23393B] bg-white dark:bg-[#0E1B1D] py-6 px-4 text-center text-xs font-mono text-neutral-500 dark:text-[#8FA8A5]">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
-            {settings.roomName} (Room {settings.roomNumber}) · Roommates:{' '}
-            {roommates.map((r) => r.name).join(', ')}
+            {settings.roomName} (Room {settings.roomNumber}) · {roommates.length} Roommates
           </div>
           <div>
-            Amounts in {settings.currencySymbol} ({settings.currency}) · Synced with Supabase
+            Amounts in {settings.currencySymbol} ({settings.currency}) · Supabase Active
           </div>
         </div>
       </footer>
 
+      {/* Modals */}
       <ExpenseModal
         isOpen={isExpenseModalOpen}
         onClose={() => setIsExpenseModalOpen(false)}
@@ -675,6 +1134,50 @@ export default function App() {
         hasKitty={kittyDeposits.length > 0}
         kittyBalance={kittySummary.remaining}
       />
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        roommates={roommates}
+        coordinatorId={settings.defaultCoordinator}
+        adminPin={settings.adminPin}
+        onLoginSuccess={handleLoginSuccess}
+        onSwitchToViewer={handleSwitchToViewer}
+        onSetAdminPin={handleSetAdminPin}
+      />
+
+      {isBreakdownModalOpen && breakdownOtherId && userSession.roommateId && (
+        <DebtBreakdownModal
+          isOpen={isBreakdownModalOpen}
+          onClose={() => {
+            setIsBreakdownModalOpen(false);
+            setBreakdownOtherId(null);
+          }}
+          myRoommateId={userSession.roommateId}
+          otherRoommateId={breakdownOtherId}
+          roommates={roommates}
+          expenses={expenses}
+          payments={payments}
+          paymentRequests={paymentRequests}
+          currencySymbol={settings.currencySymbol}
+          onRequestPayment={(fromId, toId, amount) => {
+            handleOpenPaymentRequestModal(fromId, toId, amount);
+          }}
+        />
+      )}
+
+      {isPaymentRequestModalOpen && (
+        <PaymentRequestModal
+          isOpen={isPaymentRequestModalOpen}
+          onClose={() => setIsPaymentRequestModalOpen(false)}
+          onSubmit={handleSubmitPaymentRequest}
+          roommates={roommates}
+          initialFromId={requestInitialFromId}
+          initialToId={requestInitialToId}
+          initialAmount={requestInitialAmount}
+          currencySymbol={settings.currencySymbol}
+        />
+      )}
     </div>
   );
 }

@@ -79,11 +79,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [currency, setCurrency] = useState(settings.currency);
   const [monthlyBudget, setMonthlyBudget] = useState(settings.monthlyBudget.toString());
   const [defaultCoordinator, setDefaultCoordinator] = useState(settings.defaultCoordinator);
+  const [adminPin, setAdminPin] = useState(settings.adminPin || '');
   const [savedSettingsMsg, setSavedSettingsMsg] = useState(false);
 
   // New roommate form
   const [newRoommateName, setNewRoommateName] = useState('');
   const [newRoommateHandle, setNewRoommateHandle] = useState('');
+  const [newRoommatePin, setNewRoommatePin] = useState('');
 
   // New category form
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -91,12 +93,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateSettings({
+      ...settings,
       roomName: roomName.trim() || 'Hostel Room Ledger',
       roomNumber: roomNumber.trim() || '304',
       currency,
       currencySymbol,
       monthlyBudget: parseFloat(monthlyBudget) || 0,
       defaultCoordinator,
+      adminPin: adminPin.trim() || undefined,
     });
     setSavedSettingsMsg(true);
     setTimeout(() => setSavedSettingsMsg(false), 3000);
@@ -122,11 +126,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     );
   };
 
+  const handleUpdateRoommatePin = (id: string, pinVal: string) => {
+    onUpdateRoommates(
+      roommates.map((r) => (r.id === id ? { ...r, pin: pinVal.trim() || undefined } : r))
+    );
+  };
+
   const handleAddRoommate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoommateName.trim()) return;
 
-    const newId = crypto.randomUUID();
+    const newId = `r_${Date.now()}`;
     const nextColor = COLOR_PALETTE[roommates.length % COLOR_PALETTE.length];
 
     const updated = [
@@ -136,12 +146,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         name: newRoommateName.trim(),
         color: nextColor,
         handle: newRoommateHandle.trim() || undefined,
+        pin: newRoommatePin.trim() || undefined,
+        isActive: true,
       },
     ];
 
     onUpdateRoommates(updated);
     setNewRoommateName('');
     setNewRoommateHandle('');
+    setNewRoommatePin('');
   };
 
   const handleDeleteRoommate = (id: string) => {
@@ -319,6 +332,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </select>
           </div>
 
+          <div>
+            <label className="block text-xs font-mono uppercase tracking-wider text-purple-600 dark:text-purple-400 font-semibold mb-1">
+              Coordinator Admin Master PIN
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={8}
+              value={adminPin}
+              onChange={(e) => setAdminPin(e.target.value)}
+              placeholder="Set a private admin PIN"
+              className="w-full px-3 py-2 text-xs font-mono tabular-nums rounded-lg border border-purple-300 dark:border-purple-800 bg-neutral-50 dark:bg-[#152426] text-neutral-900 dark:text-[#E6F0EE] focus:ring-2 focus:ring-purple-600"
+            />
+          </div>
+
           <div className="flex items-end">
             <button
               type="submit"
@@ -337,7 +366,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             Roommates ({roommates.length})
           </h3>
           <p className="text-xs text-neutral-500 dark:text-[#8FA8A5]">
-            Edit roommate names, avatars, and payment methods. All expenses and balances update automatically.
+            Edit roommate names, avatars, access PINs, and payment methods. All expenses and balances update automatically.
           </p>
         </div>
 
@@ -370,17 +399,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               </div>
 
-              <div>
-                <label className="text-[10px] font-mono uppercase text-neutral-400 block mb-0.5">
-                  Payment Handle (WeChat / Alipay / UPI / Cash)
-                </label>
-                <input
-                  type="text"
-                  defaultValue={r.handle || ''}
-                  placeholder="e.g. Alipay: 138..., WeChat: john"
-                  onBlur={(e) => handleUpdateRoommateHandle(r.id, e.target.value)}
-                  className="w-full text-xs bg-white dark:bg-[#111D1F] border border-neutral-300 dark:border-[#23393B] rounded px-2 py-1 text-neutral-900 dark:text-white font-mono"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono uppercase text-neutral-400 block mb-0.5">
+                    Access PIN
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={8}
+                    defaultValue={r.pin || ''}
+                    onBlur={(e) => handleUpdateRoommatePin(r.id, e.target.value)}
+                    className="w-full text-xs bg-white dark:bg-[#111D1F] border border-neutral-300 dark:border-[#23393B] rounded px-2 py-1 text-neutral-900 dark:text-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-mono uppercase text-neutral-400 block mb-0.5">
+                    Payment Handle
+                  </label>
+                  <input
+                    type="text"
+                    defaultValue={r.handle || ''}
+                    placeholder="e.g. Alipay"
+                    onBlur={(e) => handleUpdateRoommateHandle(r.id, e.target.value)}
+                    className="w-full text-xs bg-white dark:bg-[#111D1F] border border-neutral-300 dark:border-[#23393B] rounded px-2 py-1 text-neutral-900 dark:text-white font-mono"
+                  />
+                </div>
               </div>
             </div>
           ))}
@@ -398,6 +443,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               value={newRoommateName}
               onChange={(e) => setNewRoommateName(e.target.value)}
               className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 dark:border-[#23393B] bg-neutral-50 dark:bg-[#152426] text-neutral-900 dark:text-[#E6F0EE]"
+            />
+          </div>
+          <div className="w-28">
+            <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 dark:text-[#8FA8A5] mb-1">
+              PIN
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={8}
+              placeholder="Set PIN"
+              value={newRoommatePin}
+              onChange={(e) => setNewRoommatePin(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-neutral-300 dark:border-[#23393B] bg-neutral-50 dark:bg-[#152426] text-neutral-900 dark:text-[#E6F0EE]"
             />
           </div>
           <div className="flex-1">

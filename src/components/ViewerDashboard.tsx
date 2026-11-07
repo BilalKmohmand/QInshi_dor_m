@@ -366,8 +366,8 @@ export const ViewerDashboard: React.FC<ViewerDashboardProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+        <div className="scroll-x">
+          <table className="w-full min-w-[36rem] text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-[#23393B] text-[11px] font-mono text-neutral-400 uppercase">
                 <th className="py-2.5 px-3">Date</th>

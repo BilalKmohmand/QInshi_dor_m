@@ -374,3 +374,177 @@ export function generateCsvExport(
 
   return csv;
 }
+
+/**
+ * Calculate total pending settlement amount across all suggested transfers
+ */
+export function calculateTotalPendingSettlementAmount(
+  transfers: SettlementTransfer[]
+): number {
+  return transfers.reduce((sum, t) => sum + t.amount, 0);
+}
+
+/**
+ * Detailed purchase-by-purchase debt breakdown between two roommates
+ */
+export function calculatePairwiseDebt(
+  roommateAId: string,
+  roommateBId: string,
+  expenses: Expense[],
+  payments: Payment[],
+  roommates: Roommate[]
+) {
+  const roommateMap = new Map(roommates.map((r) => [r.id, r]));
+  const otherRoommate = roommateMap.get(roommateBId) || {
+    id: roommateBId,
+    name: 'Roommate',
+    color: '#0B7A6E',
+  };
+
+  const items: import('../types').DebtBreakdownItem[] = [];
+  let iOweThemGross = 0;
+  let theyOweMeGross = 0;
+
+  // 1. Process all expenses
+  expenses.forEach((e) => {
+    if (!e.split || e.split.length === 0) return;
+    const shares = calculateExpenseShare(e);
+
+    // Case 1: Roommate B paid, and Roommate A was part of the split
+    if (e.paidBy === roommateBId && e.split.includes(roommateAId)) {
+      const myShare = shares[roommateAId] || 0;
+      if (myShare > 0) {
+        iOweThemGross += myShare;
+        items.push({
+          expenseId: e.id,
+          what: e.what,
+          category: e.cat,
+          date: e.date,
+          originalAmount: e.amount,
+          paidById: roommateBId,
+          paidByName: otherRoommate.name,
+          splitMembersCount: e.split.length,
+          myShare: myShare,
+          otherShare: shares[roommateBId] || 0,
+          direction: 'i_owe',
+          amountOwed: myShare,
+        });
+      }
+    }
+
+    // Case 2: Roommate A paid, and Roommate B was part of the split
+    if (e.paidBy === roommateAId && e.split.includes(roommateBId)) {
+      const theirShare = shares[roommateBId] || 0;
+      if (theirShare > 0) {
+        theyOweMeGross += theirShare;
+        items.push({
+          expenseId: e.id,
+          what: e.what,
+          category: e.cat,
+          date: e.date,
+          originalAmount: e.amount,
+          paidById: roommateAId,
+          paidByName: roommateMap.get(roommateAId)?.name || 'Me',
+          splitMembersCount: e.split.length,
+          myShare: shares[roommateAId] || 0,
+          otherShare: theirShare,
+          direction: 'they_owe',
+          amountOwed: theirShare,
+        });
+      }
+    }
+  });
+
+  // 2. Process verified payments between A and B
+  let iPaidThemVerified = 0;
+  let theyPaidMeVerified = 0;
+
+  payments.forEach((p) => {
+    if (p.from === roommateAId && p.to === roommateBId) {
+      iPaidThemVerified += p.amount;
+    } else if (p.from === roommateBId && p.to === roommateAId) {
+      theyPaidMeVerified += p.amount;
+    }
+  });
+
+  // Sort items by date descending
+  items.sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  // Net Balance: (what they owe me + what I paid them) - (what I owe them + what they paid me)
+  // Positive = they owe me; Negative = I owe them
+  const rawNet = (theyOweMeGross + iPaidThemVerified) - (iOweThemGross + theyPaidMeVerified);
+  const netBalance = Math.round(rawNet * 100) / 100;
+
+  return {
+    otherRoommate,
+    iOweThemGross: Math.round(iOweThemGross * 100) / 100,
+    theyOweMeGross: Math.round(theyOweMeGross * 100) / 100,
+    iPaidThemVerified: Math.round(iPaidThemVerified * 100) / 100,
+    theyPaidMeVerified: Math.round(theyPaidMeVerified * 100) / 100,
+    netBalance,
+    items,
+  };
+}
+
+/**
+ * Calculate pairwise debt summaries for a logged-in roommate
+ */
+export function calculateAllPairwiseForRoommate(
+  myRoommateId: string,
+  roommates: Roommate[],
+  expenses: Expense[],
+  payments: Payment[],
+  paymentRequests: import('../types').PaymentRequest[]
+) {
+  const summaries: import('../types').PairwiseDebtSummary[] = [];
+
+  roommates.forEach((other) => {
+    if (other.id === myRoommateId) return;
+
+    const pairwise = calculatePairwiseDebt(
+      myRoommateId,
+      other.id,
+      expenses,
+      payments,
+      roommates
+    );
+
+    const pending = paymentRequests.filter(
+      (pr) =>
+        pr.status === 'pending' &&
+        ((pr.fromRoommate === myRoommateId && pr.toRoommate === other.id) ||
+         (pr.fromRoommate === other.id && pr.toRoommate === myRoommateId))
+    );
+
+    summaries.push({
+      otherRoommate: other,
+      iOweThemGross: pairwise.iOweThemGross,
+      theyOweMeGross: pairwise.theyOweMeGross,
+      iPaidThemVerified: pairwise.iPaidThemVerified,
+      theyPaidMeVerified: pairwise.theyPaidMeVerified,
+      netBalance: pairwise.netBalance,
+      items: pairwise.items,
+      pendingRequests: pending,
+    });
+  });
+
+  // Split into Who I Owe, Who Owes Me, and Settled
+  const whoIOwe = summaries.filter((s) => s.netBalance < -0.01);
+  const whoOwesMe = summaries.filter((s) => s.netBalance > 0.01);
+  const settled = summaries.filter((s) => Math.abs(s.netBalance) <= 0.01);
+
+  const totalOwedByMe = whoIOwe.reduce((sum, s) => sum + Math.abs(s.netBalance), 0);
+  const totalOwedToMe = whoOwesMe.reduce((sum, s) => sum + s.netBalance, 0);
+  const myNetPosition = totalOwedToMe - totalOwedByMe;
+
+  return {
+    summaries,
+    whoIOwe,
+    whoOwesMe,
+    settled,
+    totalOwedByMe: Math.round(totalOwedByMe * 100) / 100,
+    totalOwedToMe: Math.round(totalOwedToMe * 100) / 100,
+    myNetPosition: Math.round(myNetPosition * 100) / 100,
+  };
+}
+

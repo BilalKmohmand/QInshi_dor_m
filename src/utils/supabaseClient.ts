@@ -457,11 +457,23 @@ export async function updateRoomSettingsInSupabase(
   if (error) throw error;
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isUuid(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
+/** Upsert roommates. Returns the list with any invalid IDs rewritten to UUIDs. */
 export async function updateRoommatesInSupabase(
   roomId: string,
   roommates: Roommate[]
-): Promise<void> {
-  for (const r of roommates) {
+): Promise<Roommate[]> {
+  const normalized = roommates.map((r) =>
+    isUuid(r.id) ? r : { ...r, id: newId() }
+  );
+
+  for (const r of normalized) {
     const { error } = await supabase.from('roommates').upsert({
       id: r.id,
       room_id: roomId,
@@ -471,6 +483,8 @@ export async function updateRoommatesInSupabase(
     });
     if (error) throw error;
   }
+
+  return normalized;
 }
 
 export async function savePaymentRequestToSupabase(

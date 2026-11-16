@@ -883,14 +883,26 @@ export default function App() {
   };
 
   const handleUpdateRoommates = async (newRoommates: Roommate[]) => {
+    const previous = roommates;
     syncRoommatePins(newRoommates);
     setRoommates(newRoommates);
     showToast('Roommates roster updated.');
     logAudit('Updated roommates', 'roommate', `Roster now contains ${newRoommates.length} members`);
     try {
-      await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates);
+      const saved = await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates);
+      // Keep local IDs in sync if any legacy non-UUID ids were rewritten
+      if (saved.some((r, i) => r.id !== newRoommates[i]?.id)) {
+        syncRoommatePins(saved);
+        setRoommates(saved);
+      }
     } catch (err) {
       console.error('Supabase update roommates error:', err);
+      setRoommates(previous);
+      showToast(
+        err instanceof Error
+          ? `Could not save roommate: ${err.message}`
+          : 'Could not save roommate to Supabase.'
+      );
     }
   };
 

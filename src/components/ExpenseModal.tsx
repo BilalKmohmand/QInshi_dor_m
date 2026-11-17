@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Expense, Roommate, SplitMode } from '../types';
 import { X, Check, Calculator, Sparkles } from 'lucide-react';
 
@@ -8,10 +8,26 @@ interface ExpenseModalProps {
   onSave: (expense: Omit<Expense, 'id'> | Expense) => void;
   expenseToEdit?: Expense | null;
   roommates: Roommate[];
+  /** Recent expenses used to inherit who usually splits (so newcomers stay unchecked). */
+  recentExpenses?: Expense[];
   categories: string[];
   currencySymbol: string;
   hasKitty?: boolean;
   kittyBalance?: number;
+}
+
+/** Prefer last expense's split (still on roster). Newcomers are NOT auto-included. */
+function defaultSplitForNewExpense(
+  roommates: Roommate[],
+  recentExpenses: Expense[] = []
+): string[] {
+  const active = roommates.filter((r) => r.isActive !== false);
+  const activeIds = new Set(active.map((r) => r.id));
+  for (const e of recentExpenses) {
+    const kept = (e.split || []).filter((id) => activeIds.has(id));
+    if (kept.length > 0) return kept;
+  }
+  return active.map((r) => r.id);
 }
 
 export const ExpenseModal: React.FC<ExpenseModalProps> = ({
@@ -20,6 +36,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   onSave,
   expenseToEdit,
   roommates,
+  recentExpenses = [],
   categories,
   currencySymbol,
   hasKitty = false,
@@ -32,14 +49,30 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   const [cat, setCat] = useState(categories[0] || 'Food');
   const [amount, setAmount] = useState<string>('');
   const [paidBy, setPaidBy] = useState(roommates[0]?.id || '');
-  const [split, setSplit] = useState<string[]>(roommates.map((r) => r.id));
+  const [split, setSplit] = useState<string[]>(() =>
+    defaultSplitForNewExpense(roommates, recentExpenses)
+  );
   const [splitMode, setSplitMode] = useState<SplitMode>('equal');
   const [customAmounts, setCustomAmounts] = useState<Record<string, number>>({});
   const [customShares, setCustomShares] = useState<Record<string, number>>({});
   const [notes, setNotes] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Snapshot props for init only — do not re-expand split when roommates sync mid-edit
+  const roommatesRef = useRef(roommates);
+  const categoriesRef = useRef(categories);
+  const recentRef = useRef(recentExpenses);
+  roommatesRef.current = roommates;
+  categoriesRef.current = categories;
+  recentRef.current = recentExpenses;
+
   useEffect(() => {
+    if (!isOpen) return;
+
+    const rms = roommatesRef.current;
+    const cats = categoriesRef.current;
+    const recent = recentRef.current;
+
     if (expenseToEdit) {
       setDate(expenseToEdit.date);
       setWhat(expenseToEdit.what);
@@ -52,19 +85,24 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
       setCustomShares(expenseToEdit.customShares || {});
       setNotes(expenseToEdit.notes || '');
     } else {
+      const nextSplit = defaultSplitForNewExpense(rms, recent);
       setDate(new Date().toISOString().slice(0, 10));
       setWhat('');
-      setCat(categories[0] || 'Food');
+      setCat(cats[0] || 'Food');
       setAmount('');
-      setPaidBy(roommates[0]?.id || '');
-      setSplit(roommates.map((r) => r.id));
+      setPaidBy(
+        nextSplit.includes(rms[0]?.id)
+          ? rms[0]?.id || ''
+          : nextSplit[0] || rms[0]?.id || ''
+      );
+      setSplit(nextSplit);
       setSplitMode('equal');
       setCustomAmounts({});
       setCustomShares({});
       setNotes('');
     }
     setErrorMsg('');
-  }, [expenseToEdit, isOpen, roommates, categories]);
+  }, [isOpen, expenseToEdit]);
 
   if (!isOpen) return null;
 
@@ -402,6 +440,9 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                   </button>
                 </div>
               </div>
+              <p className="text-[11px] text-neutral-500 dark:text-[#8FA8A5] mb-2.5 leading-snug">
+                Defaults to the last expense’s group. New roommates stay unchecked until you tick them — they are never added to old purchases.
+              </p>
 
               <div className="space-y-2">
                 {roommates.map((r) => {

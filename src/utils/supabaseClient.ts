@@ -27,6 +27,8 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     autoRefreshToken: true,
     detectSessionInUrl: true,
     storageKey: 'hostel_supabase_auth_session',
+    // Avoid navigator.locks deadlocks that can hang Rest calls forever in some browsers
+    lock: async (_name, _acquireTimeout, fn) => fn(),
   },
   global: {
     headers: {
@@ -34,6 +36,25 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     },
   },
 });
+
+/** Fail a promise if it takes longer than `ms` (prevents infinite "Loading…" banner). */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms / 1000}s`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 export function newId(): string {
   return crypto.randomUUID();
@@ -160,7 +181,7 @@ export async function fetchCompleteRoomData(roomId = DEFAULT_ROOM_ID): Promise<{
   // Core ledger first (fast path), then secondary feature tables.
   const [roomRes, roommatesRes, categoriesRes, expensesRes, paymentsRes, kittyRes] =
     await Promise.all([
-      supabase.from('rooms').select('*').eq('id', roomId).single(),
+      supabase.from('rooms').select('*').eq('id', roomId).maybeSingle(),
       supabase.from('roommates').select('*').eq('room_id', roomId).order('created_at'),
       supabase.from('categories').select('*').eq('room_id', roomId).order('name'),
       supabase.from('expenses').select('*').eq('room_id', roomId).order('date', { ascending: false }),
@@ -193,12 +214,20 @@ export async function fetchCompleteRoomData(roomId = DEFAULT_ROOM_ID): Promise<{
       .limit(100),
   ]);
 
-  if (roomRes.error) throw roomRes.error;
-  if (roommatesRes.error) throw roommatesRes.error;
-  if (categoriesRes.error) throw categoriesRes.error;
-  if (expensesRes.error) throw expensesRes.error;
-  if (paymentsRes.error) throw paymentsRes.error;
-  if (kittyRes.error) throw kittyRes.error;
+  if (roomRes.error) {
+    throw new Error(`rooms: ${roomRes.error.message}`);
+  }
+  if (!roomRes.data) {
+    throw new Error(`Room not found (${roomId}). Check Supabase rooms table.`);
+  }
+  if (roommatesRes.error) throw new Error(`roommates: ${roommatesRes.error.message}`);
+  if (categoriesRes.error) throw new Error(`categories: ${categoriesRes.error.message}`);
+  if (expensesRes.error) throw new Error(`expenses: ${expensesRes.error.message}`);
+  if (paymentsRes.error) throw new Error(`payments: ${paymentsRes.error.message}`);
+  // Kitty is optional — don't block the whole ledger if this table fails
+  if (kittyRes.error) {
+    console.warn('kitty_deposits fetch failed:', kittyRes.error.message);
+  }
   // New tables may not exist yet — treat as empty until migration runs
   const paymentRequests: PaymentRequest[] = requestsRes.error
     ? []
@@ -283,6 +312,9 @@ export async function fetchCompleteRoomData(roomId = DEFAULT_ROOM_ID): Promise<{
   let allSplits: SupabaseExpenseSplitRow[] = [];
   if (expenseIds.length > 0) {
     const splitsRes = await supabase.from('expense_splits').select('*').in('expense_id', expenseIds);
+    if (splitsRes.error) {
+      throw new Error(`expense_splits: ${splitsRes.error.message}`);
+    }
     allSplits = (splitsRes.data as SupabaseExpenseSplitRow[]) || [];
   }
 
@@ -386,20 +418,27 @@ export async function saveExpenseToSupabase(roomId: string, expense: Expense): P
   });
   if (expErr) throw expErr;
 
-  await supabase.from('expense_splits').delete().eq('expense_id', expense.id);
+  const splitRows = (expense.split || []).map((rmId) => ({
+    expense_id: expense.id,
+    roommate_id: rmId,
+    custom_amount:
+      expense.splitMode === 'exact' ? expense.customAmounts?.[rmId] ?? null : null,
+    custom_shares: expense.splitMode === 'shares' ? expense.customShares?.[rmId] ?? 1 : 1,
+  }));
 
-  if (expense.split?.length) {
-    const { error: splitErr } = await supabase.from('expense_splits').insert(
-      expense.split.map((rmId) => ({
-        expense_id: expense.id,
-        roommate_id: rmId,
-        custom_amount:
-          expense.splitMode === 'exact' ? expense.customAmounts?.[rmId] ?? null : null,
-        custom_shares: expense.splitMode === 'shares' ? expense.customShares?.[rmId] ?? 1 : 1,
-      }))
-    );
-    if (splitErr) throw splitErr;
+  if (splitRows.length === 0) {
+    throw new Error('Expense must include at least one roommate in the split.');
   }
+
+  // Replace splits safely: delete only after we know insert payload is valid
+  const { error: delErr } = await supabase
+    .from('expense_splits')
+    .delete()
+    .eq('expense_id', expense.id);
+  if (delErr) throw delErr;
+
+  const { error: splitErr } = await supabase.from('expense_splits').insert(splitRows);
+  if (splitErr) throw splitErr;
 }
 
 export async function deleteExpenseFromSupabase(expenseId: string): Promise<void> {

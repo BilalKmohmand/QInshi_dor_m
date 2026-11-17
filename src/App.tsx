@@ -40,6 +40,7 @@ import {
   DEFAULT_ROOM_ID,
   newId,
   supabase,
+  withTimeout,
 } from './utils/supabaseClient';
 import { rememberRoommateNames } from './utils/roommates';
 import { Header, TabKey } from './components/Header';
@@ -116,6 +117,9 @@ export default function App() {
   // Loading state for Supabase
   const [isLoadingSupabase, setIsLoadingSupabase] = useState<boolean>(true);
   const [supabaseConnected, setSupabaseConnected] = useState<boolean>(false);
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
+  const [supabaseReloadKey, setSupabaseReloadKey] = useState(0);
+  const [showSyncBanner, setShowSyncBanner] = useState(true);
 
   // Core Data States
   const [roommates, setRoommates] = useState<Roommate[]>(() => {
@@ -311,51 +315,55 @@ export default function App() {
     }, 4000);
   }, []);
 
-  // Fetch real data from live Supabase on mount
+  // Fetch real data from live Supabase on mount / retry
   useEffect(() => {
     let isMounted = true;
     async function loadData() {
       try {
         setIsLoadingSupabase(true);
-        const data = await fetchCompleteRoomData(DEFAULT_ROOM_ID);
+        setSupabaseError(null);
+        const data = await withTimeout(
+          fetchCompleteRoomData(DEFAULT_ROOM_ID),
+          20000,
+          'Supabase room sync'
+        );
         if (!isMounted) return;
 
         const pinMap = loadPinMap();
-        startTransition(() => {
-          if (data.roommates && data.roommates.length > 0) {
-            const nextRoommates = data.roommates.map((r) => ({
-              ...r,
-              pin: pinMap[r.id] || r.pin,
-            }));
-            rememberRoommateNames(nextRoommates);
-            setRoommates(nextRoommates);
-          }
-          if (data.categories && data.categories.length > 0) {
-            setCategories(data.categories);
-          }
-          if (data.expenses) {
-            setExpenses(data.expenses.filter((e) => !e.sample));
-          }
-          if (data.payments) {
-            setPayments(data.payments.filter((p) => !p.sample));
-          }
-          if (data.kittyDeposits) {
-            setKittyDeposits(data.kittyDeposits);
-          }
-          if (data.settings) {
-            setSettings((prev) => ({
-              ...data.settings,
-              adminPin: prev.adminPin || data.settings.adminPin,
-            }));
-          }
-          if (data.paymentRequests) setPaymentRequests(data.paymentRequests);
-          if (data.notifications) setNotifications(data.notifications);
-          if (data.auditLogs) setAuditLogs(data.auditLogs);
-          setSupabaseConnected(true);
-        });
+        const nextRoommates = (data.roommates || []).map((r) => ({
+          ...r,
+          pin: pinMap[r.id] || r.pin,
+        }));
+        rememberRoommateNames(nextRoommates);
+
+        // Apply live ledger immediately (don't leave stale localStorage as source of truth)
+        setRoommates(nextRoommates);
+        setCategories(data.categories?.length ? data.categories : INITIAL_CATEGORIES);
+        setExpenses((data.expenses || []).filter((e) => !e.sample));
+        setPayments((data.payments || []).filter((p) => !p.sample));
+        setKittyDeposits(data.kittyDeposits || []);
+        setSettings((prev) => ({
+          ...data.settings,
+          adminPin: prev.adminPin || data.settings.adminPin,
+        }));
+        setPaymentRequests(data.paymentRequests || []);
+        setNotifications(data.notifications || []);
+        setAuditLogs(data.auditLogs || []);
+        setSupabaseConnected(true);
+        setSupabaseError(null);
+        setShowSyncBanner(true);
+        window.setTimeout(() => {
+          if (isMounted) setShowSyncBanner(false);
+        }, 4000);
       } catch (err) {
-        console.warn('Could not sync with Supabase, using cached records:', err);
-        setSupabaseConnected(false);
+        const message =
+          err instanceof Error ? err.message : typeof err === 'string' ? err : 'Unknown sync error';
+        console.error('Could not sync with Supabase:', err);
+        if (isMounted) {
+          setSupabaseConnected(false);
+          setSupabaseError(message);
+          setShowSyncBanner(true);
+        }
       } finally {
         if (isMounted) setIsLoadingSupabase(false);
       }
@@ -368,6 +376,7 @@ export default function App() {
       if (data?.session?.user && isMounted) {
         const email = data.session.user.email || '';
         const isBilal = email.toLowerCase().includes('bilal') || email.toLowerCase().includes('admin');
+        // Resolve against live cache names after load; roommates here may still be stale
         const matched = roommates.find((r) => email.toLowerCase().includes(r.name.toLowerCase()));
 
         setUserSession((prev) => {
@@ -386,7 +395,7 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [supabaseReloadKey]);
 
   // UI Navigation & View State
   const [currentTab, setCurrentTab] = useState<TabKey>('expenses');
@@ -530,9 +539,15 @@ export default function App() {
   };
 
   const handleSaveExpense = async (expenseData: Omit<Expense, 'id'> | Expense) => {
+    if (!expenseData.split?.length) {
+      showToast('Pick at least one roommate who shared this expense.');
+      return;
+    }
+
     if ('id' in expenseData && expenseData.id) {
       // Update
       const updated = expenseData as Expense;
+      const previous = expenses.find((e) => e.id === updated.id) || null;
       setExpenses((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
       showToast(`Updated expense "${updated.what}".`);
       logAudit('Updated expense', 'expense', `Updated "${updated.what}"`, updated.amount, updated.id);
@@ -541,6 +556,12 @@ export default function App() {
         await saveExpenseToSupabase(DEFAULT_ROOM_ID, updated);
       } catch (err) {
         console.error('Supabase write error:', err);
+        if (previous) {
+          setExpenses((prev) => prev.map((e) => (e.id === previous.id ? previous : e)));
+        }
+        showToast(
+          err instanceof Error ? `Could not save expense: ${err.message}` : 'Could not save expense.'
+        );
       }
     } else {
       // Create
@@ -552,7 +573,18 @@ export default function App() {
       showToast(`Logged purchase "${newExp.what}" for ${settings.currencySymbol}${newExp.amount.toFixed(2)}.`);
       logAudit('Added expense', 'expense', `Added "${newExp.what}" paid by ${newExp.paidBy}`, newExp.amount, newExp.id);
 
-      // Notify roommates in split
+      try {
+        await saveExpenseToSupabase(DEFAULT_ROOM_ID, newExp);
+      } catch (err) {
+        console.error('Supabase write error:', err);
+        setExpenses((prev) => prev.filter((e) => e.id !== newExp.id));
+        showToast(
+          err instanceof Error ? `Could not save expense: ${err.message}` : 'Could not save expense.'
+        );
+        return;
+      }
+
+      // Notify only after a successful write
       newExp.split.forEach((rmId) => {
         if (rmId !== newExp.paidBy) {
           sendNotification(
@@ -564,12 +596,6 @@ export default function App() {
           );
         }
       });
-
-      try {
-        await saveExpenseToSupabase(DEFAULT_ROOM_ID, newExp);
-      } catch (err) {
-        console.error('Supabase write error:', err);
-      }
     }
   };
 
@@ -906,7 +932,41 @@ export default function App() {
     logAudit('Updated roommates', 'roommate', `Roster now contains ${newRoommates.length} members`);
     try {
       const saved = await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates, previous);
-      if (saved.some((r, i) => r.id !== newRoommates[i]?.id)) {
+      // If any ids were rewritten to UUIDs, remap ledger refs so balances don't go orphan
+      const idMap = new Map<string, string>();
+      newRoommates.forEach((r, i) => {
+        const nextId = saved[i]?.id;
+        if (nextId && nextId !== r.id) idMap.set(r.id, nextId);
+      });
+      if (idMap.size > 0) {
+        const remap = (id: string) => idMap.get(id) || id;
+        setExpenses((prev) =>
+          prev.map((e) => ({
+            ...e,
+            paidBy: e.paidBy === 'KITTY' ? 'KITTY' : remap(e.paidBy),
+            split: e.split.map(remap),
+            customAmounts: e.customAmounts
+              ? Object.fromEntries(
+                  Object.entries(e.customAmounts).map(([k, v]) => [remap(k), v])
+                )
+              : undefined,
+            customShares: e.customShares
+              ? Object.fromEntries(
+                  Object.entries(e.customShares).map(([k, v]) => [remap(k), v])
+                )
+              : undefined,
+          }))
+        );
+        setPayments((prev) =>
+          prev.map((p) => ({ ...p, from: remap(p.from), to: remap(p.to) }))
+        );
+        setKittyDeposits((prev) =>
+          prev.map((k) => ({ ...k, roommateId: remap(k.roommateId) }))
+        );
+        setSettings((prev) => ({
+          ...prev,
+          defaultCoordinator: remap(prev.defaultCoordinator),
+        }));
         syncRoommatePins(saved);
         rememberRoommateNames(saved);
         setRoommates(saved);
@@ -945,6 +1005,38 @@ export default function App() {
         pendingRequestsCount={pendingRequestsCount}
         roommates={roommates}
       />
+
+      {(isLoadingSupabase || supabaseError || (supabaseConnected && showSyncBanner)) && (
+        <div
+          className={`px-4 py-2 text-xs sm:text-sm border-b flex items-center justify-between gap-3 ${
+            supabaseError
+              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-red-800 dark:text-red-200'
+              : isLoadingSupabase
+                ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-100'
+                : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-900 dark:text-emerald-100'
+          }`}
+        >
+          <span className="min-w-0 truncate">
+            {isLoadingSupabase
+              ? 'Loading live data from Supabase…'
+              : supabaseError
+                ? `Supabase sync failed: ${supabaseError}`
+                : `Synced with Supabase · ${roommates.length} roommates · ${expenses.length} expenses`}
+          </span>
+          {!isLoadingSupabase && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowSyncBanner(true);
+                setSupabaseReloadKey((k) => k + 1);
+              }}
+              className="shrink-0 underline font-semibold hover:opacity-80"
+            >
+              {supabaseError ? 'Retry' : 'Refresh'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Hero / Editorial Masthead (Only in Admin or Viewer mode; Personal roommate dashboard has its own top welcome card) */}
       {userSession.role !== 'roommate' && (
@@ -1157,6 +1249,7 @@ export default function App() {
         onSave={handleSaveExpense}
         expenseToEdit={expenseToEdit}
         roommates={roommates}
+        recentExpenses={expenses}
         categories={categories}
         currencySymbol={settings.currencySymbol}
         hasKitty={kittyDeposits.length > 0}

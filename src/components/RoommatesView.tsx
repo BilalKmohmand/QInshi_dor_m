@@ -178,12 +178,23 @@ export const RoommatesView: React.FC<RoommatesViewProps> = ({
     e.preventDefault();
     if (!newName.trim()) return;
 
+    const name = newName.trim();
+    const duplicate = roommates.find(
+      (r) => r.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (duplicate) {
+      showFeedbackMsg(
+        `"${duplicate.name}" is already on the roster. Edit that person instead of adding again.`
+      );
+      return;
+    }
+
     const roommateId = crypto.randomUUID();
     const updated: Roommate[] = [
       ...roommates,
       {
         id: roommateId,
-        name: newName.trim(),
+        name,
         color: newColor || PRESET_COLORS[roommates.length % PRESET_COLORS.length],
         handle: newHandle.trim() || undefined,
         pin: newPin.trim() || undefined,
@@ -196,7 +207,7 @@ export const RoommatesView: React.FC<RoommatesViewProps> = ({
     setNewHandle('');
     setNewPin('');
     setShowAddForm(false);
-    showFeedbackMsg(`Registered new roommate "${newName.trim()}".`);
+    showFeedbackMsg(`Registered new roommate "${name}".`);
   };
 
   return (

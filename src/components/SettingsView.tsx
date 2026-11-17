@@ -136,6 +136,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     e.preventDefault();
     if (!newRoommateName.trim()) return;
 
+    const name = newRoommateName.trim();
+    const duplicate = roommates.find(
+      (r) => r.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (duplicate) {
+      alert(`"${duplicate.name}" is already on the roster. Edit that person instead of adding again.`);
+      return;
+    }
+
     const roommateId = crypto.randomUUID();
     const nextColor = COLOR_PALETTE[roommates.length % COLOR_PALETTE.length];
 
@@ -143,7 +152,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       ...roommates,
       {
         id: roommateId,
-        name: newRoommateName.trim(),
+        name,
         color: nextColor,
         handle: newRoommateHandle.trim() || undefined,
         pin: newRoommatePin.trim() || undefined,
@@ -162,11 +171,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       alert('You need at least two roommates in the ledger.');
       return;
     }
+    const target = roommates.find((r) => r.id === id);
     const hasExpenses = expenses.some((e) => e.paidBy === id || e.split.includes(id));
-    if (hasExpenses) {
-      if (!confirm('This roommate has logged expenses or shares. Are you sure you want to remove them?')) {
-        return;
-      }
+    const hasPayments = payments.some((p) => p.from === id || p.to === id);
+    if (hasExpenses || hasPayments) {
+      alert(
+        `Cannot remove ${target?.name || 'this roommate'}: they still appear on expenses or payments. Reassign those records first.`
+      );
+      return;
     }
     onUpdateRoommates(roommates.filter((r) => r.id !== id));
   };

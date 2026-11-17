@@ -66,9 +66,15 @@ export const BalancesView: React.FC<BalancesViewProps> = ({
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <span className="text-xs text-neutral-500 dark:text-[#8FA8A5]">
-            Total In-Flight Debt: <strong className="font-mono tabular-nums text-neutral-900 dark:text-white">{formatMoney(totalOwedByDebtors, currencySymbol)}</strong>
+            Total In-Flight Debt:{' '}
+            <strong className="font-mono tabular-nums text-neutral-900 dark:text-white">
+              {formatMoney(totalOwedByDebtors, currencySymbol)}
+            </strong>
+          </span>
+          <span className="hidden sm:inline text-[11px] text-neutral-400 dark:text-[#7A9390]">
+            Period Net = paid − share this month · Outstanding = all-time + repayments
           </span>
           <span className="text-neutral-300 dark:text-neutral-700">|</span>
           <div className="flex items-center bg-neutral-100 dark:bg-[#152426] p-0.5 rounded-lg text-xs">

@@ -315,7 +315,16 @@ export async function fetchCompleteRoomData(roomId = DEFAULT_ROOM_ID): Promise<{
       cat: e.category,
       amount: Number(e.amount),
       paidBy: e.paid_from_kitty ? 'KITTY' : e.paid_by || '',
-      split: splitMemberIds.length > 0 ? splitMemberIds : roommates.map((r) => r.id),
+      // Never invent splits for missing rows — that retroactively bills every roommate
+      // (including newcomers/duplicates) and makes balances look "duplicated".
+      split:
+        splitMemberIds.length > 0
+          ? splitMemberIds
+          : e.paid_from_kitty
+            ? []
+            : e.paid_by
+              ? [e.paid_by]
+              : [],
       splitMode: (e.split_mode as 'equal' | 'exact' | 'shares') || 'equal',
       customAmounts: Object.keys(customAmounts).length > 0 ? customAmounts : undefined,
       customShares: Object.keys(customShares).length > 0 ? customShares : undefined,

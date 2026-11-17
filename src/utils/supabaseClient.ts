@@ -287,13 +287,22 @@ export async function fetchCompleteRoomData(roomId = DEFAULT_ROOM_ID): Promise<{
     defaultCoordinator: roomRow?.default_coordinator || '',
   };
 
-  const roommates: Roommate[] = ((roommatesRes.data as SupabaseRoommateRow[]) || []).map((r) => ({
-    id: r.id,
-    name: r.name,
-    color: r.color || '#0B7A6E',
-    handle: r.handle || undefined,
-    isActive: true,
-  }));
+  // Dedupe by name (keep oldest). Duplicate roster rows shatter balances.
+  const rawRoommates = ((roommatesRes.data as SupabaseRoommateRow[]) || []).slice();
+  const seenNames = new Set<string>();
+  const roommates: Roommate[] = [];
+  for (const r of rawRoommates) {
+    const key = r.name.trim().toLowerCase();
+    if (seenNames.has(key)) continue;
+    seenNames.add(key);
+    roommates.push({
+      id: r.id,
+      name: r.name,
+      color: r.color || '#0B7A6E',
+      handle: r.handle || undefined,
+      isActive: true,
+    });
+  }
 
   if (!settings.defaultCoordinator && roommates.length > 0) {
     const bilal = roommates.find((r) => r.name.toLowerCase().includes('bilal'));
@@ -512,7 +521,7 @@ export function isUuid(id: string): boolean {
   return UUID_RE.test(id);
 }
 
-/** Upsert roommates. Optionally deletes roommates removed from the roster (only if unused). */
+/** Upsert roommates. Never deletes anyone still referenced in the ledger (cascade would wipe history). */
 export async function updateRoommatesInSupabase(
   roomId: string,
   roommates: Roommate[],
@@ -521,6 +530,28 @@ export async function updateRoommatesInSupabase(
   const normalized = roommates.map((r) =>
     isUuid(r.id) ? r : { ...r, id: newId() }
   );
+
+  // Block duplicate names against what is already in Supabase
+  const { data: existingRows, error: existingErr } = await supabase
+    .from('roommates')
+    .select('id,name')
+    .eq('room_id', roomId);
+  if (existingErr) throw existingErr;
+
+  const nameOwner = new Map<string, string>();
+  for (const row of existingRows || []) {
+    nameOwner.set(row.name.trim().toLowerCase(), row.id);
+  }
+  for (const r of normalized) {
+    const key = r.name.trim().toLowerCase();
+    const owner = nameOwner.get(key);
+    if (owner && owner !== r.id) {
+      throw new Error(
+        `"${r.name}" is already on the roster. Do not add the same person twice — that breaks balances.`
+      );
+    }
+    nameOwner.set(key, r.id);
+  }
 
   for (const r of normalized) {
     const { error } = await supabase.from('roommates').upsert({
@@ -536,9 +567,36 @@ export async function updateRoommatesInSupabase(
   const nextIds = new Set(normalized.map((r) => r.id));
   const removed = previousRoommates.filter((r) => r.id && !nextIds.has(r.id));
   for (const gone of removed) {
+    const [{ count: splitCount }, { count: paidCount }, { count: payCount }, { count: kittyCount }] =
+      await Promise.all([
+        supabase
+          .from('expense_splits')
+          .select('*', { count: 'exact', head: true })
+          .eq('roommate_id', gone.id),
+        supabase
+          .from('expenses')
+          .select('*', { count: 'exact', head: true })
+          .eq('paid_by', gone.id),
+        supabase
+          .from('payments')
+          .select('*', { count: 'exact', head: true })
+          .or(`from_roommate.eq.${gone.id},to_roommate.eq.${gone.id}`),
+        supabase
+          .from('kitty_deposits')
+          .select('*', { count: 'exact', head: true })
+          .eq('roommate_id', gone.id),
+      ]);
+
+    const used =
+      (splitCount || 0) + (paidCount || 0) + (payCount || 0) + (kittyCount || 0) > 0;
+    if (used) {
+      throw new Error(
+        `Cannot remove ${gone.name || 'roommate'}: they still appear on expenses/payments. Removing them would erase their ledger history.`
+      );
+    }
+
     const { error } = await supabase.from('roommates').delete().eq('id', gone.id);
-    // Ignore FK failures — caller already blocks deletes for referenced roommates
-    if (error && !/foreign key|violates/i.test(error.message)) throw error;
+    if (error) throw error;
   }
 
   return normalized;

@@ -66,7 +66,7 @@ create table if not exists expenses (
 
 create table if not exists expense_splits (
   expense_id uuid not null references expenses(id) on delete cascade,
-  roommate_id uuid not null references roommates(id) on delete cascade,
+  roommate_id uuid not null references roommates(id) on delete restrict,
   custom_amount numeric(12,2),
   custom_shares numeric(12,4) default 1,
   primary key (expense_id, roommate_id)
@@ -76,8 +76,8 @@ create table if not exists payments (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references rooms(id) on delete cascade,
   date date not null,
-  from_roommate uuid not null references roommates(id) on delete cascade,
-  to_roommate uuid not null references roommates(id) on delete cascade,
+  from_roommate uuid not null references roommates(id) on delete restrict,
+  to_roommate uuid not null references roommates(id) on delete restrict,
   amount numeric(12,2) not null check (amount > 0),
   note text,
   is_sample boolean not null default false,
@@ -89,7 +89,7 @@ create table if not exists kitty_deposits (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references rooms(id) on delete cascade,
   date date not null,
-  roommate_id uuid not null references roommates(id) on delete cascade,
+  roommate_id uuid not null references roommates(id) on delete restrict,
   amount numeric(12,2) not null check (amount > 0),
   note text,
   created_at timestamptz not null default now()

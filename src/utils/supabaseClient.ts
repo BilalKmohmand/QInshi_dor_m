@@ -464,10 +464,11 @@ export function isUuid(id: string): boolean {
   return UUID_RE.test(id);
 }
 
-/** Upsert roommates. Returns the list with any invalid IDs rewritten to UUIDs. */
+/** Upsert roommates. Optionally deletes roommates removed from the roster (only if unused). */
 export async function updateRoommatesInSupabase(
   roomId: string,
-  roommates: Roommate[]
+  roommates: Roommate[],
+  previousRoommates: Roommate[] = []
 ): Promise<Roommate[]> {
   const normalized = roommates.map((r) =>
     isUuid(r.id) ? r : { ...r, id: newId() }
@@ -482,6 +483,14 @@ export async function updateRoommatesInSupabase(
       handle: r.handle || null,
     });
     if (error) throw error;
+  }
+
+  const nextIds = new Set(normalized.map((r) => r.id));
+  const removed = previousRoommates.filter((r) => r.id && !nextIds.has(r.id));
+  for (const gone of removed) {
+    const { error } = await supabase.from('roommates').delete().eq('id', gone.id);
+    // Ignore FK failures — caller already blocks deletes for referenced roommates
+    if (error && !/foreign key|violates/i.test(error.message)) throw error;
   }
 
   return normalized;

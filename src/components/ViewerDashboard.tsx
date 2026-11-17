@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Expense, Payment, Roommate, KittyDeposit, RoomSettings } from '../types';
+import { roommateName } from '../utils/roommates';
 import {
   calculateMonthlyStats,
   calculateOutstandingBalances,
@@ -419,7 +420,7 @@ export const ViewerDashboard: React.FC<ViewerDashboardProps> = ({
                               className="w-2 h-2 rounded-full"
                               style={{ backgroundColor: payer?.color || '#0B7A6E' }}
                             />
-                            {payer?.name || e.paidBy}
+                            {roommateName(e.paidBy, roommates)}
                           </span>
                         )}
                       </td>

@@ -218,7 +218,7 @@ export const KittyView: React.FC<KittyViewProps> = ({
                         {d.date}
                       </td>
                       <td className="py-2 font-medium text-neutral-800 dark:text-neutral-200">
-                        {roommateMap.get(d.roommateId)?.name || d.roommateId}
+                        {roommateMap.get(d.roommateId)?.name || 'Unknown'}
                       </td>
                       <td className="py-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                         +{formatMoney(d.amount, currencySymbol)}

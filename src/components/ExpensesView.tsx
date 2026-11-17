@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Expense, Roommate } from '../types';
+import { roommateName } from '../utils/roommates';
 import { formatMoney, monthOf } from '../utils/calculator';
 import {
   Plus,
@@ -244,7 +245,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
             ) : (
               filteredExpenses.map((e) => {
                 const payer = roommateMap.get(e.paidBy);
-                const splitMembers = e.split.map((id) => roommateMap.get(id)?.name || id);
+                const splitMembers = e.split.map((id) => roommateName(id, roommates));
                 const eachCost =
                   e.split.length > 0 ? (e.amount / e.split.length).toFixed(2) : '–';
 
@@ -295,7 +296,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                             className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: payer?.color || '#0B7A6E' }}
                           />
-                          {payer?.name || e.paidBy}
+                          {roommateName(e.paidBy, roommates)}
                         </span>
                       )}
                     </td>

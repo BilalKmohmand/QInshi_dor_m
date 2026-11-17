@@ -41,6 +41,7 @@ import {
   newId,
   supabase,
 } from './utils/supabaseClient';
+import { rememberRoommateNames } from './utils/roommates';
 import { Header, TabKey } from './components/Header';
 import { HeroMasthead } from './components/HeroMasthead';
 import { ExpensesView } from './components/ExpensesView';
@@ -322,12 +323,12 @@ export default function App() {
         const pinMap = loadPinMap();
         startTransition(() => {
           if (data.roommates && data.roommates.length > 0) {
-            setRoommates(
-              data.roommates.map((r) => ({
-                ...r,
-                pin: pinMap[r.id] || r.pin,
-              }))
-            );
+            const nextRoommates = data.roommates.map((r) => ({
+              ...r,
+              pin: pinMap[r.id] || r.pin,
+            }));
+            rememberRoommateNames(nextRoommates);
+            setRoommates(nextRoommates);
           }
           if (data.categories && data.categories.length > 0) {
             setCategories(data.categories);
@@ -884,15 +885,30 @@ export default function App() {
 
   const handleUpdateRoommates = async (newRoommates: Roommate[]) => {
     const previous = roommates;
+    const removed = previous.filter((p) => !newRoommates.some((n) => n.id === p.id));
+    for (const gone of removed) {
+      const stillUsed =
+        expenses.some((e) => e.paidBy === gone.id || e.split.includes(gone.id)) ||
+        payments.some((p) => p.from === gone.id || p.to === gone.id) ||
+        kittyDeposits.some((k) => k.roommateId === gone.id);
+      if (stillUsed) {
+        showToast(
+          `Cannot remove ${gone.name}: they still appear on expenses/payments. Keep them, or reassign those records first.`
+        );
+        return;
+      }
+    }
+
     syncRoommatePins(newRoommates);
+    rememberRoommateNames(newRoommates);
     setRoommates(newRoommates);
     showToast('Roommates roster updated.');
     logAudit('Updated roommates', 'roommate', `Roster now contains ${newRoommates.length} members`);
     try {
-      const saved = await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates);
-      // Keep local IDs in sync if any legacy non-UUID ids were rewritten
+      const saved = await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates, previous);
       if (saved.some((r, i) => r.id !== newRoommates[i]?.id)) {
         syncRoommatePins(saved);
+        rememberRoommateNames(saved);
         setRoommates(saved);
       }
     } catch (err) {

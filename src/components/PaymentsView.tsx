@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Payment, Roommate } from '../types';
+import { roommateName } from '../utils/roommates';
 import { formatMoney } from '../utils/calculator';
 import { Plus, ArrowRight, Trash2, CheckCircle2 } from 'lucide-react';
 
@@ -240,7 +241,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                             className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: fromR?.color || '#0B7A6E' }}
                           />
-                          {fromR?.name || p.from}
+                          {roommateName(p.from, roommates)}
                         </span>
                         {p.sample && (
                           <span className="ml-2 text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300">
@@ -259,7 +260,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                             className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: toR?.color || '#0B7A6E' }}
                           />
-                          {toR?.name || p.to}
+                          {roommateName(p.to, roommates)}
                         </span>
                       </td>
 

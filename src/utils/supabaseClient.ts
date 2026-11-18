@@ -521,6 +521,56 @@ export function isUuid(id: string): boolean {
   return UUID_RE.test(id);
 }
 
+/** Insert a single new roommate. Does not touch the rest of the roster. */
+export async function addRoommateToSupabase(
+  roomId: string,
+  roommate: Roommate
+): Promise<Roommate> {
+  const row: Roommate = isUuid(roommate.id) ? roommate : { ...roommate, id: newId() };
+  const key = row.name.trim().toLowerCase();
+  if (!key) throw new Error('Roommate name is required.');
+
+  const { data: existingRows, error: existingErr } = await supabase
+    .from('roommates')
+    .select('id,name')
+    .eq('room_id', roomId);
+  if (existingErr) throw existingErr;
+
+  const clash = (existingRows || []).find((r) => r.name.trim().toLowerCase() === key);
+  if (clash) {
+    throw new Error(
+      `"${clash.name}" is already on the roster. Edit that person instead of adding again.`
+    );
+  }
+
+  const { error } = await supabase.from('roommates').insert({
+    id: row.id,
+    room_id: roomId,
+    name: row.name.trim(),
+    color: row.color,
+    handle: row.handle || null,
+  });
+  if (error) throw error;
+  return { ...row, name: row.name.trim() };
+}
+
+/** Update existing roommate fields (name/color/handle). Never inserts duplicates. */
+export async function updateRoommateFieldsInSupabase(
+  roomId: string,
+  roommate: Roommate
+): Promise<void> {
+  const { error } = await supabase
+    .from('roommates')
+    .update({
+      name: roommate.name.trim(),
+      color: roommate.color,
+      handle: roommate.handle || null,
+    })
+    .eq('id', roommate.id)
+    .eq('room_id', roomId);
+  if (error) throw error;
+}
+
 /** Upsert roommates. Never deletes anyone still referenced in the ledger (cascade would wipe history). */
 export async function updateRoommatesInSupabase(
   roomId: string,
@@ -531,37 +581,18 @@ export async function updateRoommatesInSupabase(
     isUuid(r.id) ? r : { ...r, id: newId() }
   );
 
-  // Block duplicate names against what is already in Supabase
-  const { data: existingRows, error: existingErr } = await supabase
-    .from('roommates')
-    .select('id,name')
-    .eq('room_id', roomId);
-  if (existingErr) throw existingErr;
+  const previousIds = new Set(previousRoommates.map((r) => r.id));
+  const added = normalized.filter((r) => !previousIds.has(r.id));
+  const existing = normalized.filter((r) => previousIds.has(r.id));
 
-  const nameOwner = new Map<string, string>();
-  for (const row of existingRows || []) {
-    nameOwner.set(row.name.trim().toLowerCase(), row.id);
-  }
-  for (const r of normalized) {
-    const key = r.name.trim().toLowerCase();
-    const owner = nameOwner.get(key);
-    if (owner && owner !== r.id) {
-      throw new Error(
-        `"${r.name}" is already on the roster. Do not add the same person twice — that breaks balances.`
-      );
-    }
-    nameOwner.set(key, r.id);
+  // New people → insert only (avoids whole-roster name clashes rolling back the add)
+  for (const r of added) {
+    await addRoommateToSupabase(roomId, r);
   }
 
-  for (const r of normalized) {
-    const { error } = await supabase.from('roommates').upsert({
-      id: r.id,
-      room_id: roomId,
-      name: r.name,
-      color: r.color,
-      handle: r.handle || null,
-    });
-    if (error) throw error;
+  // Existing people → update fields only
+  for (const r of existing) {
+    await updateRoommateFieldsInSupabase(roomId, r);
   }
 
   const nextIds = new Set(normalized.map((r) => r.id));

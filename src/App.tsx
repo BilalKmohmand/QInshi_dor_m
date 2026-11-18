@@ -37,6 +37,7 @@ import {
   saveNotificationToSupabase,
   markNotificationReadInSupabase,
   saveAuditLogToSupabase,
+  addRoommateToSupabase,
   DEFAULT_ROOM_ID,
   newId,
   supabase,
@@ -909,6 +910,44 @@ export default function App() {
     }
   };
 
+  const handleAddRoommate = async (roommate: Roommate): Promise<boolean> => {
+    const name = roommate.name.trim();
+    if (!name) {
+      showToast('Enter a roommate name.');
+      return false;
+    }
+    const duplicate = roommates.find((r) => r.name.trim().toLowerCase() === name.toLowerCase());
+    if (duplicate) {
+      showToast(`"${duplicate.name}" is already on the roster.`);
+      return false;
+    }
+
+    const toAdd: Roommate = {
+      ...roommate,
+      id: roommate.id && roommate.id.length > 0 ? roommate.id : newId(),
+      name,
+    };
+
+    try {
+      const saved = await addRoommateToSupabase(DEFAULT_ROOM_ID, toAdd);
+      const next = [...roommates, saved];
+      syncRoommatePins(next);
+      rememberRoommateNames(next);
+      setRoommates(next);
+      showToast(`Added roommate "${saved.name}".`);
+      logAudit('Added roommate', 'roommate', `Added "${saved.name}"`, undefined, saved.id);
+      return true;
+    } catch (err) {
+      console.error('Supabase add roommate error:', err);
+      showToast(
+        err instanceof Error
+          ? `Could not add roommate: ${err.message}`
+          : 'Could not add roommate to Supabase.'
+      );
+      return false;
+    }
+  };
+
   const handleUpdateRoommates = async (newRoommates: Roommate[]) => {
     const previous = roommates;
     const removed = previous.filter((p) => !newRoommates.some((n) => n.id === p.id));
@@ -925,6 +964,14 @@ export default function App() {
       }
     }
 
+    // Pure adds should use handleAddRoommate; keep this path for edits/removes
+    const previousIds = new Set(previous.map((r) => r.id));
+    const added = newRoommates.filter((r) => !previousIds.has(r.id));
+    if (added.length === 1 && newRoommates.length === previous.length + 1 && removed.length === 0) {
+      await handleAddRoommate(added[0]);
+      return;
+    }
+
     syncRoommatePins(newRoommates);
     rememberRoommateNames(newRoommates);
     setRoommates(newRoommates);
@@ -932,7 +979,6 @@ export default function App() {
     logAudit('Updated roommates', 'roommate', `Roster now contains ${newRoommates.length} members`);
     try {
       const saved = await updateRoommatesInSupabase(DEFAULT_ROOM_ID, newRoommates, previous);
-      // If any ids were rewritten to UUIDs, remap ledger refs so balances don't go orphan
       const idMap = new Map<string, string>();
       newRoommates.forEach((r, i) => {
         const nextId = saved[i]?.id;
@@ -967,10 +1013,10 @@ export default function App() {
           ...prev,
           defaultCoordinator: remap(prev.defaultCoordinator),
         }));
-        syncRoommatePins(saved);
-        rememberRoommateNames(saved);
-        setRoommates(saved);
       }
+      syncRoommatePins(saved);
+      rememberRoommateNames(saved);
+      setRoommates(saved);
     } catch (err) {
       console.error('Supabase update roommates error:', err);
       setRoommates(previous);
@@ -1170,6 +1216,7 @@ export default function App() {
                 expenses={expenses}
                 payments={payments}
                 onUpdateRoommates={handleUpdateRoommates}
+                onAddRoommate={handleAddRoommate}
                 onUpdateSettings={handleUpdateSettings}
               />
             )}
@@ -1209,6 +1256,7 @@ export default function App() {
                 kittyDeposits={kittyDeposits}
                 onUpdateSettings={handleUpdateSettings}
                 onUpdateRoommates={handleUpdateRoommates}
+                onAddRoommate={handleAddRoommate}
                 onUpdateCategories={setCategories}
                 onRestoreSampleData={() => {}}
                 onClearAllData={() => {}}

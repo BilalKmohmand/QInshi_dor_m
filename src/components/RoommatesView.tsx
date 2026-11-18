@@ -23,6 +23,7 @@ interface RoommatesViewProps {
   expenses: Expense[];
   payments: Payment[];
   onUpdateRoommates: (roommates: Roommate[]) => void;
+  onAddRoommate?: (roommate: Roommate) => Promise<boolean>;
   onUpdateSettings: (settings: RoomSettings) => void;
 }
 
@@ -45,6 +46,7 @@ export const RoommatesView: React.FC<RoommatesViewProps> = ({
   expenses,
   payments,
   onUpdateRoommates,
+  onAddRoommate,
   onUpdateSettings,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -174,7 +176,7 @@ export const RoommatesView: React.FC<RoommatesViewProps> = ({
     }, 3500);
   };
 
-  const handleAddRoommate = (e: React.FormEvent) => {
+  const handleAddRoommate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) return;
 
@@ -189,20 +191,22 @@ export const RoommatesView: React.FC<RoommatesViewProps> = ({
       return;
     }
 
-    const roommateId = crypto.randomUUID();
-    const updated: Roommate[] = [
-      ...roommates,
-      {
-        id: roommateId,
-        name,
-        color: newColor || PRESET_COLORS[roommates.length % PRESET_COLORS.length],
-        handle: newHandle.trim() || undefined,
-        pin: newPin.trim() || undefined,
-        isActive: true,
-      },
-    ];
+    const roommate: Roommate = {
+      id: crypto.randomUUID(),
+      name,
+      color: newColor || PRESET_COLORS[roommates.length % PRESET_COLORS.length],
+      handle: newHandle.trim() || undefined,
+      pin: newPin.trim() || undefined,
+      isActive: true,
+    };
 
-    onUpdateRoommates(updated);
+    if (onAddRoommate) {
+      const ok = await onAddRoommate(roommate);
+      if (!ok) return;
+    } else {
+      onUpdateRoommates([...roommates, roommate]);
+    }
+
     setNewName('');
     setNewHandle('');
     setNewPin('');

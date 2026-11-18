@@ -22,6 +22,7 @@ interface SettingsViewProps {
   kittyDeposits: KittyDeposit[];
   onUpdateSettings: (newSettings: RoomSettings) => void;
   onUpdateRoommates: (newRoommates: Roommate[]) => void;
+  onAddRoommate?: (roommate: Roommate) => Promise<boolean>;
   onUpdateCategories: (newCategories: string[]) => void;
   onRestoreSampleData: () => void;
   onClearAllData: () => void;
@@ -67,6 +68,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   kittyDeposits,
   onUpdateSettings,
   onUpdateRoommates,
+  onAddRoommate,
   onUpdateCategories,
   onRestoreSampleData,
   onClearAllData,
@@ -132,7 +134,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     );
   };
 
-  const handleAddRoommate = (e: React.FormEvent) => {
+  const handleAddRoommate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoommateName.trim()) return;
 
@@ -145,22 +147,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
-    const roommateId = crypto.randomUUID();
-    const nextColor = COLOR_PALETTE[roommates.length % COLOR_PALETTE.length];
+    const roommate: Roommate = {
+      id: crypto.randomUUID(),
+      name,
+      color: COLOR_PALETTE[roommates.length % COLOR_PALETTE.length],
+      handle: newRoommateHandle.trim() || undefined,
+      pin: newRoommatePin.trim() || undefined,
+      isActive: true,
+    };
 
-    const updated = [
-      ...roommates,
-      {
-        id: roommateId,
-        name,
-        color: nextColor,
-        handle: newRoommateHandle.trim() || undefined,
-        pin: newRoommatePin.trim() || undefined,
-        isActive: true,
-      },
-    ];
+    if (onAddRoommate) {
+      const ok = await onAddRoommate(roommate);
+      if (!ok) return;
+    } else {
+      onUpdateRoommates([...roommates, roommate]);
+    }
 
-    onUpdateRoommates(updated);
     setNewRoommateName('');
     setNewRoommateHandle('');
     setNewRoommatePin('');
